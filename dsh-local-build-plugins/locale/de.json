@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Lokale Build-Plugins",
+    "description": "Gruppiert lokal erstellte Plugins unter „Installiert“ auf der Plugin-Seite und bindet den Tab „Lokaler Build“ als zweite Komponente ein."
+  }
+}

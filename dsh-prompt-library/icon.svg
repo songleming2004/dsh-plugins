@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-label="Prompt library">
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="#EDF2FA"/>
+  <rect x="14" y="15" width="30" height="7" rx="3.5" fill="#247BBF"/>
+  <rect x="14" y="27" width="36" height="5" rx="2.5" fill="#9DB4CC"/>
+  <rect x="14" y="37" width="26" height="5" rx="2.5" fill="#9DB4CC"/>
+  <path d="M45 41.5l2.35 5.1 5.15.62-3.85 3.52.98 5.26L45 53.35l-4.63 2.65.98-5.26-3.85-3.52 5.15-.62z" fill="#F0A32E"/>
+</svg>

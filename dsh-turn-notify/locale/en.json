@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Turn result notifications",
+    "description": "macOS Notification Center banners when a turn finishes or while an approval is waiting; clicking one returns to that conversation, and a Settings page switches each alert on or off."
+  }
+}

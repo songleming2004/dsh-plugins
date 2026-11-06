@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Local build plugins",
+    "description": "Groups locally built plugins below Installed plugins on the Plugins page, and mounts the Local build plugins tab as a second component."
+  }
+}

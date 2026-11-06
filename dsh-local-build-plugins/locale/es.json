@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Plugins compilados localmente",
+    "description": "Agrupa los plugins compilados localmente bajo «Instalados» y monta la pestaña «Compilación local» como segundo componente."
+  }
+}

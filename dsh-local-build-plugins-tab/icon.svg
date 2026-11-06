@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Local build plugins tab">
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="#2451a8"/>
+  <rect x="12" y="16" width="18" height="32" rx="4" fill="#f4f7ff" opacity="0.55"/>
+  <rect x="34" y="16" width="18" height="32" rx="4" fill="#f4f7ff"/>
+  <path d="M43 26 49 32 43 38 40.5 35.5 44 32 40.5 28.5Z" fill="#ffc857"/>
+</svg>

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Extensions compilées localement",
+    "description": "Regroupe les extensions compilées localement sous « Installées » et monte l’onglet « Compilation locale » comme second composant."
+  }
+}

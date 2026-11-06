@@ -1,0 +1,6 @@
+# The prompt library is a browser-side panel, so this row only carries the bundle:
+# every capability lives in ./client.js. Keep the row so Plugin Manager lists the plugin.
+- insert:
+    - id: dsh-prompt-library
+      name: '@local/dsh-prompt-library'
+      config: {}

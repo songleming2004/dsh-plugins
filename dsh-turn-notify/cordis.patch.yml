@@ -1,0 +1,20 @@
+# dsh-turn-notify bundle patch: one Host row. The Host process watches every
+# Session feed and queues a notice for a finished turn or a pending approval; the
+# Client half shows it through the renderer's Web Notification API (app icon,
+# click opens the conversation) and renders the Settings page. The switches are
+# stored by the Host under $DSH_HOME/turn-notify/settings.json.
+- insert:
+    - id: turn-notify
+      name: '@local/dsh-turn-notify'
+      config:
+        enabled: true
+        language: zh
+        titlePrefix: DSH
+        soundName: Glass
+        maxChars: 120
+        includeSubagents: false
+        notifyOnAbnormalEnd: true
+        turnEnd: true
+        approval: true
+        sound: true
+        fallback: false

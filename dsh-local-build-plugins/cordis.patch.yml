@@ -1,0 +1,13 @@
+# Local build plugins bundle patch: two component rows, each with its own
+# switch on the bundle's page.
+#
+# - local-build-plugins-group: this package's own Client half, which splits the
+#   installed group into Installed and Local build plugins.
+# - local-build-plugins-tab: a second component package's Client half, which
+#   contributes the Local build plugins tab. Its own bundle patch is empty, so
+#   this row is the only place that component is mounted.
+- insert:
+    - id: local-build-plugins-group
+      name: '@local/dsh-local-build-plugins'
+    - id: local-build-plugins-tab
+      name: '@local/dsh-local-build-plugins-tab'

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Turn result notifications">
+  <path d="M16 10h32a8 8 0 0 1 8 8v22a8 8 0 0 1-8 8H34L22 58v-10h-6a8 8 0 0 1-8-8V18a8 8 0 0 1 8-8z" fill="#247bbf"/>
+  <path d="M20 22h24M20 30h18M20 38h12" stroke="#ffffff" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="48" cy="12" r="7" fill="#f25a5a"/>
+</svg>

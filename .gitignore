@@ -1,0 +1,8 @@
+# Installed dependencies and local build output never enter the repository.
+node_modules/
+.pnpm-store/
+dist/
+build/
+*.log
+*.tsbuildinfo
+.DS_Store

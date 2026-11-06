@@ -1,0 +1,5 @@
+# The Local build plugins tab is mounted as a component row by the
+# dsh-local-build-plugins bundle patch, so this package contributes no row of
+# its own; its `dsh.client` half still attaches to that row. An empty patch
+# keeps the package installable as a plugin bundle without inserting anything.
+[]
