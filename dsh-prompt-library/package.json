@@ -1,8 +1,8 @@
 {
   "name": "@local/dsh-prompt-library",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
-  "description": "A prompt library tab in the right Sidebar, plus a prompt picker on the New Session row: pick a saved prompt into the composer, and edit each prompt's title and text.",
+  "description": "A prompt library for the right Sidebar, a prompt picker on the New Session row, and a Settings section that maintains the same list.",
   "type": "module",
   "main": "index.js",
   "exports": {

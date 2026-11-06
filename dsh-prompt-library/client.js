@@ -1,7 +1,7 @@
 /**
- * Prompt library — a tab type in the right Sidebar, plus a shortcut on the New Session row.
+ * Prompt library — a right-Sidebar tab, a shortcut on the New Session row, and a Settings section.
  *
- * Four public extension points are used:
+ * Five public extension points are used:
  *
  * 1. `ctx.sidebarRightTabs.register({ id, kind, title, guide })` declares the tab type and the
  *    card the right Sidebar's guide page shows for it (owned by `@deepseek-ai/dsh-client-ui-sidebar-right`).
@@ -12,6 +12,9 @@
  *    conversation shows above its composer.
  * 4. `ctx.slots.register({ name: 'shell.overlay', id })` draws the menu that trigger opens. The
  *    frame-wide layer sits above every column, so the list is never clipped by the row.
+ * 5. `ctx.slots.register({ name: 'settings.section', id })` puts the same library in Settings,
+ *    with a matching `settings.section.icon` row, so prompts can be maintained with the right
+ *    Sidebar closed.
  *
  * The prompts themselves live in this browser's localStorage under one key, shared by every open
  * occurrence of the tab and by the menu, so an edit anywhere is visible everywhere.
@@ -27,6 +30,10 @@ window.__ModuleLoader__.load({
     const NS = 'dsh-prompt-library'
     /** Implementation id: the tab type's identity and the key its body registers under. */
     const ID = '@local/dsh-prompt-library'
+    /** Settings navigation id: the section and its icon share it. */
+    const SETTINGS_ID = 'prompt-library'
+    /** Place of the section among the shipped settings sections. */
+    const SETTINGS_ORDER = 42
     /** Cell id of the New Session trigger and of the overlay menu it opens. */
     const MENU_ID = '@local/dsh-prompt-library:prompt-menu'
     /** Kind the guide card opens by. */
@@ -54,6 +61,8 @@ window.__ModuleLoader__.load({
       empty: '还没有提示词，点「新建」写下第一条。',
       emptySearch: '没有匹配的提示词。',
       hint: '点击卡片插入到输入框，右侧按钮可编辑或删除。',
+      hintSettings: '点击卡片编辑内容，右侧按钮可复制或删除。',
+      settingsIntro: '这里维护「提示词」按钮里的内容。右侧栏的「常用提示词」面板用的是同一份列表，改一边两边都会更新。',
       inserted: '已插入到输入框',
       heroButton: '提示词',
       menuAria: '选择要插入的常用提示词',
@@ -87,6 +96,8 @@ window.__ModuleLoader__.load({
       empty: 'No prompts yet. Choose “New” to add the first one.',
       emptySearch: 'No prompt matches that search.',
       hint: 'Pick a card to insert it into the composer; the buttons on the right edit or delete it.',
+      hintSettings: 'Pick a card to edit it; the buttons on the right copy or delete it.',
+      settingsIntro: 'These are the prompts behind the prompt button. The right Sidebar\'s Prompt library tab shows the same list, so an edit in either place updates both.',
       inserted: 'Inserted into the composer',
       heroButton: 'Prompts',
       menuAria: 'Choose a saved prompt to insert',
@@ -592,6 +603,14 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * Navigation glyph of the Settings section; the shell supplies the square edge.
+     * @param {{ size?: number }} props - Requested square edge.
+     */
+    function SettingsGlyph({ size = 20 }) {
+      return h(LibraryGlyph, { size })
+    }
+
+    /**
      * The disclosure chevron the New Session trigger carries, matching the host's control row.
      * @param {{ size?: number, className?: string }} props - Glyph sizing.
      */
@@ -1001,6 +1020,44 @@ window.__ModuleLoader__.load({
   font-size: 12px;
   line-height: 18px;
 }
+.dshpl-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  box-sizing: border-box;
+  max-width: 720px;
+  color: var(--dsw-alias-label-primary);
+}
+.dshpl-settings-head {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.dshpl-settings-title {
+  margin: 0;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+}
+.dshpl-settings-intro {
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-secondary);
+}
+.dshpl-root-settings {
+  flex: none;
+  height: auto;
+  min-height: 0;
+}
+.dshpl-root-settings .dshpl-head { padding: 0 0 4px; }
+.dshpl-root-settings .dshpl-list {
+  flex: none;
+  overflow: visible;
+  padding: 0;
+}
+.dshpl-root-settings .dshpl-foot { padding: 8px 0 0; }
 .dshpl-visually-hidden {
   position: absolute;
   width: 1px;
@@ -1154,7 +1211,8 @@ window.__ModuleLoader__.load({
      * The tab body.
      * @param {{ t: Function, inputActions?: object }} props - Seat props plus this plugin's translate function.
      */
-    function PromptLibraryBody({ t, inputActions }) {
+    function PromptLibraryBody({ t, inputActions, variant = 'tab' }) {
+      const settings = variant === 'settings'
       const doc = useDoc()
       const [query, setQuery] = React.useState('')
       const [draft, setDraft] = React.useState(null)
@@ -1282,7 +1340,7 @@ window.__ModuleLoader__.load({
           key: prompt.id,
           prompt,
           t,
-          onInsert: insert,
+          onInsert: settings ? startEdit : insert,
           onEdit: startEdit,
           onCopy: copy,
           onRemove: remove,
@@ -1291,7 +1349,7 @@ window.__ModuleLoader__.load({
 
       return h(
         'div',
-        { className: 'dshpl-root' },
+        { className: settings ? 'dshpl-root dshpl-root-settings' : 'dshpl-root' },
         h(
           'div',
           { className: 'dshpl-head', key: 'head' },
@@ -1317,9 +1375,28 @@ window.__ModuleLoader__.load({
         h(
           'div',
           { className: 'dshpl-foot', key: 'foot' },
-          h('span', {}, t('hint')),
+          h('span', {}, t(settings ? 'hintSettings' : 'hint')),
           h('span', {}, t('countPrefix') + prompts.length + t('countSuffix')),
         ),
+      )
+    }
+
+    /**
+     * The Settings section: the same library, maintained in place. Nothing on the page can
+     * receive an insertion, so a card opens its editor instead of writing to a composer.
+     * @param {{ t: Function }} props - The section's translate function.
+     */
+    function PromptSettingsPage({ t }) {
+      return h(
+        'section',
+        { className: 'dshpl-settings', 'aria-label': t('tabTitle') },
+        h(
+          'div',
+          { className: 'dshpl-settings-head' },
+          h('h2', { className: 'dshpl-settings-title' }, t('tabTitle')),
+          h('p', { className: 'dshpl-settings-intro' }, t('settingsIntro')),
+        ),
+        h(PromptLibraryBody, { t, variant: 'settings' }),
       )
     }
 
@@ -1377,6 +1454,26 @@ window.__ModuleLoader__.load({
             key: ID,
           }, (props) => h(PromptLibraryBody, { ...props, t }))),
           'dsh-prompt-library: tab body',
+        )
+
+        // Settings is where the library is maintained when the right Sidebar is closed. The same
+        // list, minus the composer it would insert into.
+        ctx.effect(
+          () => ctx.slots.inject('settings.section', () => ctx.slots.register({
+            name: 'settings.section',
+            id: SETTINGS_ID,
+            order: SETTINGS_ORDER,
+            label: () => t('tabTitle'),
+          }, (props) => h(PromptSettingsPage, { ...props, t }))),
+          'dsh-prompt-library: settings section',
+        )
+
+        ctx.effect(
+          () => ctx.slots.inject('settings.section.icon', () => ctx.slots.register({
+            name: 'settings.section.icon',
+            id: SETTINGS_ID,
+          }, SettingsGlyph)),
+          'dsh-prompt-library: settings icon',
         )
 
         // The New Session row (the one carrying the workspace and preset controls) is the only

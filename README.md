@@ -8,7 +8,7 @@ plugin.
 
 | Directory | Package | What it does |
 | --- | --- | --- |
-| `dsh-prompt-library` | `@local/dsh-prompt-library` | A tab in the right Sidebar that keeps frequently used prompts: pick one into the composer, edit each prompt's title and text. A blank conversation also gets a prompt button on its New Session row (beside the workspace and preset controls) that inserts a saved prompt by title. |
+| `dsh-prompt-library` | `@local/dsh-prompt-library` | A tab in the right Sidebar that keeps frequently used prompts: pick one into the composer, edit each prompt's title and text. A blank conversation also gets a prompt button on its New Session row (beside the workspace and preset controls) that inserts a saved prompt by title, and Settings → 常用提示词 maintains the same list. |
 | `dsh-local-build-plugins` | `@local/dsh-local-build-plugins` | Groups locally built plugins into their own section in Plugin Manager. |
 | `dsh-local-build-plugins-tab` | `@local/dsh-local-build-plugins-tab` | Adds the "Local build" tab to Plugin Manager. |
 | `dsh-turn-notify` | `@local/dsh-turn-notify` | Notifies when a turn finishes. |
