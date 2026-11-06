@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Prompt library",
-    "description": "A prompt library in the right Sidebar, a prompt button on the New Session row, and a Settings section that maintains the same list."
+    "description": "A prompt library in the right Sidebar, a prompt button on the New Session row, and a Settings section that maintains the same list. Picking another prompt replaces the previous one while the composer is unchanged."
   }
 }

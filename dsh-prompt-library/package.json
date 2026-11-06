@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-prompt-library",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "private": true,
   "description": "A prompt library for the right Sidebar, a prompt picker on the New Session row, and a Settings section that maintains the same list.",
   "type": "module",

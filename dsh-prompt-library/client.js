@@ -18,6 +18,11 @@
  *
  * The prompts themselves live in this browser's localStorage under one key, shared by every open
  * occurrence of the tab and by the menu, so an edit anywhere is visible everywhere.
+ *
+ * Picking a prompt into a composer remembers the range it occupies and that composer's content
+ * revision. Picking another prompt while the revision is unchanged swaps the remembered range in
+ * place, so switching prompts replaces the previous prompt instead of appending to it. Any edit to
+ * the draft moves the revision, which turns the next pick back into an ordinary caret insertion.
  */
 
 window.__ModuleLoader__.load({
@@ -60,10 +65,11 @@ window.__ModuleLoader__.load({
       contentPlaceholder: '输入提示词内容，选中卡片时会插入到输入框光标处',
       empty: '还没有提示词，点「新建」写下第一条。',
       emptySearch: '没有匹配的提示词。',
-      hint: '点击卡片插入到输入框，右侧按钮可编辑或删除。',
+      hint: '点击卡片插入；输入框未修改时再点会替换上一条。右侧按钮可编辑或删除。',
       hintSettings: '点击卡片编辑内容，右侧按钮可复制或删除。',
       settingsIntro: '这里维护「提示词」按钮里的内容。右侧栏的「常用提示词」面板用的是同一份列表，改一边两边都会更新。',
       inserted: '已插入到输入框',
+      replaced: '已替换提示词',
       heroButton: '提示词',
       menuAria: '选择要插入的常用提示词',
       menuEmpty: '还没有提示词。在右侧栏的「常用提示词」里添加。',
@@ -95,10 +101,11 @@ window.__ModuleLoader__.load({
       contentPlaceholder: 'Write the prompt; picking the card inserts it at the composer caret',
       empty: 'No prompts yet. Choose “New” to add the first one.',
       emptySearch: 'No prompt matches that search.',
-      hint: 'Pick a card to insert it into the composer; the buttons on the right edit or delete it.',
+      hint: 'Pick a card to insert; picking another replaces it while the draft is unchanged. The buttons on the right edit or delete it.',
       hintSettings: 'Pick a card to edit it; the buttons on the right copy or delete it.',
       settingsIntro: 'These are the prompts behind the prompt button. The right Sidebar\'s Prompt library tab shows the same list, so an edit in either place updates both.',
       inserted: 'Inserted into the composer',
+      replaced: 'Replaced the prompt',
       heroButton: 'Prompts',
       menuAria: 'Choose a saved prompt to insert',
       menuEmpty: 'No prompts yet. Add them in the Prompt library tab.',
@@ -286,23 +293,106 @@ window.__ModuleLoader__.load({
 
     //#region composer bridge
 
+    /** Reference placeholders the composer strips from every externally supplied text. */
+    const PLACEHOLDER_RE = /[\uE100-\uE11D\uFFFC]/gu
+
     /**
-     * Insert text at the composer caret through the public InputActions face.
-     * @param {object | undefined} inputActions - Session standard prop.
-     * @param {string} text - Prompt text.
-     * @returns {boolean} Whether the composer accepted the insertion.
+     * The range the last prompt this plugin wrote into a composer occupies, keyed by the session's
+     * stable InputActions face. The revision is the composer's content revision, which only moves
+     * when the draft's text or chips change (moving the caret does not), so an equal revision means
+     * the prompt is still exactly where it was left.
+     * @type {WeakMap<object, { start: number, end: number, draftRev: number }>}
      */
-    function insertIntoComposer(inputActions, text) {
-      if (inputActions === undefined || inputActions === null) return false
-      if (typeof inputActions.captureInsertion !== 'function') return false
-      if (typeof inputActions.insertText !== 'function') return false
+    const writtenPrompts = new WeakMap()
+
+    /**
+     * Mirror the composer's own normalization so remembered offsets and text length stay in its
+     * detect coordinates: CRLF becomes LF and literal placeholder characters are dropped.
+     * @param {string} text - Prompt text.
+     * @returns {string} Text the composer will actually insert.
+     */
+    function normalizePromptText(text) {
+      return String(text).replace(/\r\n?/gu, '\n').replace(PLACEHOLDER_RE, '')
+    }
+
+    /**
+     * Read the composer's current selection and revision through the public InputActions face.
+     * @param {object | undefined} inputActions - Session standard prop.
+     * @returns {{ start: number, end: number, draftRev: number } | null} The current span.
+     */
+    function captureInsertionSpan(inputActions) {
       try {
         const span = inputActions.captureInsertion()
-        if (span === undefined || span === null) return false
-        return inputActions.insertText(text, span) === true
+        if (span === undefined || span === null) return null
+        const { start, end, draftRev } = span
+        if (typeof start !== 'number' || typeof end !== 'number' || typeof draftRev !== 'number') return null
+        return { start, end, draftRev }
       } catch {
-        return false
+        return null
       }
+    }
+
+    /**
+     * Remember the range the text just inserted at `start` now occupies. The end offset follows
+     * from the text length because plain prompt text maps one detect offset per character.
+     * @param {object} inputActions - Session standard prop.
+     * @param {number} start - Offset the insertion began at.
+     * @param {string} text - Sanitized text that was inserted.
+     */
+    function rememberInsertion(inputActions, start, text) {
+      const after = captureInsertionSpan(inputActions)
+      if (after === null) {
+        writtenPrompts.delete(inputActions)
+        return
+      }
+      writtenPrompts.set(inputActions, { start, end: start + text.length, draftRev: after.draftRev })
+    }
+
+    /**
+     * Write one prompt into the composer.
+     *
+     * When the draft has not changed since the previous prompt this plugin inserted, the previous
+     * prompt's range is replaced in place, so picking another prompt swaps it instead of appending.
+     * Once the draft has been edited the remembered revision no longer matches and the prompt is
+     * inserted at the caret, exactly like any other insertion.
+     * @param {object | undefined} inputActions - Session standard prop.
+     * @param {string} content - Prompt text.
+     * @returns {'inserted' | 'replaced' | null} How the text arrived, or null when the composer refused it.
+     */
+    function writePrompt(inputActions, content) {
+      if (inputActions === undefined || inputActions === null) return null
+      if (typeof inputActions.captureInsertion !== 'function') return null
+      if (typeof inputActions.insertText !== 'function') return null
+      const text = normalizePromptText(content)
+      if (text === '') return null
+      const current = captureInsertionSpan(inputActions)
+      if (current === null) return null
+
+      const previous = writtenPrompts.get(inputActions)
+      if (previous !== undefined && previous.draftRev === current.draftRev) {
+        try {
+          const swap = { start: previous.start, end: previous.end, draftRev: current.draftRev }
+          if (inputActions.insertText(text, swap) === true) {
+            rememberInsertion(inputActions, swap.start, text)
+            return 'replaced'
+          }
+        } catch {
+          // Fall through to an ordinary insertion at the caret.
+        }
+      }
+
+      // Re-read the caret so an edit that landed after the first capture still inserts at the
+      // position the composer holds now.
+      const caret = captureInsertionSpan(inputActions)
+      if (caret === null) return null
+      try {
+        const span = { start: caret.start, end: caret.end, draftRev: caret.draftRev }
+        if (inputActions.insertText(text, span) !== true) return null
+      } catch {
+        return null
+      }
+      rememberInsertion(inputActions, caret.start, text)
+      return 'inserted'
     }
 
     /**
@@ -355,7 +445,7 @@ window.__ModuleLoader__.load({
      * frame-wide overlay, which is a different render subtree with no composer props. This
      * module-level store carries the trigger geometry and the insertion target across that
      * boundary, the same way the library document is shared with the sidebar tab.
-     * @type {null | { anchorEl: Element, rect: { top: number, bottom: number, right: number }, insert: (content: string) => boolean }}
+     * @type {null | { anchorEl: Element, rect: { top: number, bottom: number, right: number }, insert: (content: string) => 'inserted' | 'replaced' | null }}
      */
     let promptMenu = null
     const promptMenuListeners = new Set()
@@ -435,7 +525,7 @@ window.__ModuleLoader__.load({
         setPromptMenu({
           anchorEl: el,
           rect: { top: rect.top, bottom: rect.bottom, right: rect.right },
-          insert: (content) => insertIntoComposer(inputActions, content),
+          insert: (content) => writePrompt(inputActions, content),
         })
       }
 
@@ -507,7 +597,7 @@ window.__ModuleLoader__.load({
       }, [state])
 
       const pick = (prompt) => {
-        if (state.insert(prompt.content)) {
+        if (state.insert(prompt.content) !== null) {
           setPromptMenu(null)
           return
         }
@@ -1242,8 +1332,9 @@ window.__ModuleLoader__.load({
 
       const insert = (prompt) => {
         setConfirmId(null)
-        if (insertIntoComposer(inputActions, prompt.content)) {
-          flash(t('inserted'), 'ok')
+        const outcome = writePrompt(inputActions, prompt.content)
+        if (outcome !== null) {
+          flash(t(outcome === 'replaced' ? 'replaced' : 'inserted'), 'ok')
           return
         }
         if (copyText(prompt.content)) flash(t('copied'), 'ok')
