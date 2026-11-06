@@ -329,11 +329,11 @@ window.__ModuleLoader__.load({
     //#region new-session menu
 
     /** Width of the prompt menu, in pixels. */
-    const MENU_WIDTH = 248
+    const MENU_WIDTH = 264
     /** Tallest the menu grows before its list scrolls. */
-    const MENU_MAX_HEIGHT = 320
+    const MENU_MAX_HEIGHT = 336
     /** Distance between the trigger and the menu. */
-    const MENU_GAP = 6
+    const MENU_GAP = 4
     /** Space the menu keeps from every viewport edge. */
     const MENU_INSET = 8
     /** Room below the trigger needed to open downwards instead of upwards. */
@@ -441,7 +441,8 @@ window.__ModuleLoader__.load({
           onClick: toggle,
         },
         h(LibraryGlyph, { size: 14 }),
-        h('span', {}, t('heroButton')),
+        h('span', { className: 'dshpl-hero-label' }, t('heroButton')),
+        h(ChevronGlyph, { size: 14 }),
       )
     }
 
@@ -587,6 +588,29 @@ window.__ModuleLoader__.load({
           fill: 'currentColor',
           stroke: 'none',
         }),
+      )
+    }
+
+    /**
+     * The disclosure chevron the New Session trigger carries, matching the host's control row.
+     * @param {{ size?: number, className?: string }} props - Glyph sizing.
+     */
+    function ChevronGlyph({ size = 14, className }) {
+      return h(
+        'svg',
+        {
+          width: size,
+          height: size,
+          viewBox: '0 0 24 24',
+          fill: 'none',
+          stroke: 'currentColor',
+          strokeWidth: 2,
+          strokeLinecap: 'round',
+          strokeLinejoin: 'round',
+          className,
+          'aria-hidden': true,
+        },
+        h('path', { d: 'M7 10l5 5 5-5' }),
       )
     }
 
@@ -881,89 +905,101 @@ window.__ModuleLoader__.load({
 .dshpl-notice[data-tone="error"] { color: var(--dsw-alias-state-error-primary); }
 .dshpl-hero {
   flex: none;
-  height: 26px;
-  padding: 0 7px;
+  min-height: 28px;
+  max-width: 220px;
+  padding: 0 8px;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  border: 1px solid transparent;
-  border-radius: var(--dsw-radius-sm, 8px);
+  gap: 4px;
+  border: none;
+  border-radius: var(--dsw-radius-sm, 6px);
   background: transparent;
-  color: var(--dsw-alias-label-secondary);
+  color: var(--dsw-alias-label-primary);
   font: inherit;
-  font-size: 12px;
-  line-height: 1;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
   white-space: nowrap;
   cursor: pointer;
 }
-.dshpl-hero:hover {
-  background: var(--dsw-alias-bg-layer-2);
-  color: var(--dsw-alias-label-primary);
-}
+.dshpl-hero:hover { background: var(--dsw-alias-interactive-bg-hover, var(--dsw-alias-bg-layer-2)); }
+.dshpl-hero[aria-expanded="true"] { background: var(--dsw-alias-interactive-bg-hover, var(--dsw-alias-bg-layer-2)); }
 .dshpl-hero:focus-visible {
-  outline: 2px solid var(--dsw-alias-brand-primary);
+  outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-brand-primary));
   outline-offset: 1px;
 }
-.dshpl-hero[aria-expanded="true"] {
-  background: var(--dsw-alias-bg-layer-2);
-  color: var(--dsw-alias-label-primary);
+.dshpl-hero-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dshpl-hero-chevron {
+  flex: none;
+  color: var(--dsw-alias-label-caption, var(--dsw-alias-label-secondary));
 }
 .dshpl-menu {
   position: fixed;
-  z-index: 60;
+  z-index: 1100;
   box-sizing: border-box;
   pointer-events: auto;
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  padding: 6px;
+  gap: 0;
+  padding: 4px;
+  border: 0;
+  border-radius: var(--dsw-radius-lg, 12px);
+  background: var(--dsw-menu-surface-fill, var(--dsw-alias-bg-overlay));
+  backdrop-filter: var(--dsw-menu-backdrop-filter);
+  --dsw-elevation-stroke-color: var(--dsw-alias-border-l1);
+  box-shadow: var(--dsw-elevation-prominent, 0 12px 30px rgb(0 0 0 / 16%));
+  color: var(--dsw-alias-label-primary);
   overflow-y: auto;
   overscroll-behavior: contain;
-  border: 1px solid var(--dsw-alias-border-l1);
-  border-radius: var(--dsw-radius-md, 10px);
-  background: var(--dsw-alias-bg-layer-1);
-  box-shadow: 0 12px 30px rgb(0 0 0 / 16%);
-  color: var(--dsw-alias-label-primary);
-  font-size: 13px;
-  line-height: 1.35;
 }
 .dshpl-menu-item {
-  flex: none;
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   width: 100%;
   box-sizing: border-box;
-  padding: 7px 9px;
+  min-height: 34px;
+  padding: 6px 8px;
   border: none;
-  border-radius: var(--dsw-radius-sm, 6px);
+  border-radius: var(--dsw-radius-md, 8px);
   background: transparent;
-  color: inherit;
+  color: var(--dsw-alias-label-primary);
   font: inherit;
+  font-size: 13px;
+  line-height: 20px;
   text-align: left;
   cursor: pointer;
 }
-.dshpl-menu-item:hover { background: var(--dsw-alias-bg-layer-2); }
+.dshpl-menu-item:hover { background: var(--dsw-alias-interactive-bg-hover, var(--dsw-alias-bg-layer-2)); }
 .dshpl-menu-item:focus-visible {
-  outline: 2px solid var(--dsw-alias-brand-primary);
-  outline-offset: -2px;
+  background: var(--dsw-alias-interactive-bg-hover, var(--dsw-alias-bg-layer-2));
+  outline: none;
 }
 .dshpl-menu-title {
-  display: block;
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .dshpl-menu-empty {
-  padding: 10px 9px;
-  color: var(--dsw-alias-label-secondary);
+  padding: 6px 8px;
+  color: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary));
   font-size: 12px;
-  line-height: 1.5;
+  line-height: 18px;
 }
 .dshpl-menu-error {
-  margin-top: 4px;
-  padding: 6px 9px;
-  border-top: 1px solid var(--dsw-alias-border-l1);
+  margin-top: 3px;
+  padding: 5px 8px;
+  border-top: .5px solid var(--dsw-alias-border-l2);
   color: var(--dsw-alias-state-error-primary);
   font-size: 12px;
+  line-height: 18px;
 }
 .dshpl-visually-hidden {
   position: absolute;
@@ -977,6 +1013,32 @@ window.__ModuleLoader__.load({
   border: 0;
 }
 `
+
+    /** Marks the one stylesheet this plugin owns, so a reload replaces it instead of stacking copies. */
+    const STYLE_TAG_ID = '@local/dsh-prompt-library/panel.css'
+
+    /**
+     * Add the plugin's stylesheet to the page.
+     *
+     * It must live outside the components: the tab body, the New Session trigger and the overlay
+     * menu are three separate render subtrees, and the trigger and the menu are visible while the
+     * Sidebar tab is closed. Install it once from `apply` instead of rendering it in the tab.
+     * @returns {() => void} Remove the stylesheet.
+     */
+    function installStyles() {
+      if (typeof document === 'undefined') return () => {}
+      for (const stale of document.querySelectorAll('style[data-plugin-css=' + JSON.stringify(STYLE_TAG_ID) + ']')) {
+        stale.remove()
+      }
+      const tag = document.createElement('style')
+      tag.dataset.plugin = '@local/dsh-prompt-library'
+      tag.dataset.pluginCss = STYLE_TAG_ID
+      tag.textContent = STYLE_TEXT
+      document.head.appendChild(tag)
+      return () => {
+        tag.remove()
+      }
+    }
 
     //#endregion
 
@@ -1230,7 +1292,6 @@ window.__ModuleLoader__.load({
       return h(
         'div',
         { className: 'dshpl-root' },
-        h('style', { key: 'style' }, STYLE_TEXT),
         h(
           'div',
           { className: 'dshpl-head', key: 'head' },
@@ -1271,6 +1332,11 @@ window.__ModuleLoader__.load({
       inject: ['slots', 'locale', 'sidebarRightTabs'],
       apply(ctx) {
         const t = ctx.locale.bind(NS)
+
+        // The stylesheet serves the tab, the New Session trigger, and the overlay menu, so it is
+        // installed with the plugin rather than rendered by any one of those components.
+        ctx.effect(() => installStyles(), 'dsh-prompt-library: stylesheet')
+
 
         // A hot reload of this module can meet a namespace that a previous generation still
         // owns; report it instead of failing the whole plugin activation.
