@@ -163,6 +163,20 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * @returns the id of the global panel the main column shows, or null when the
+     * Conversation is the main column. The panel set is the left sidebar's entry
+     * list, so any id here means a page such as Plugins or Settings covers the
+     * Conversation while the selection keeps pointing at the Session.
+     */
+    const activePanelId = (ctx) => {
+      try {
+        return ctx.get('layout')?.panelInfo?.getSnapshot?.()?.activePanelId ?? null
+      } catch {
+        return null
+      }
+    }
+
+    /**
      * Bring DSH forward and open the conversation that produced one notice.
      *
      * `uiWorkspace.openSession` takes the Session id itself (the same call the
@@ -170,6 +184,13 @@ window.__ModuleLoader__.load({
      * workspace treat the target as unknown, which is how a click used to land on
      * a blank new session. A Session that the Client has not listed yet is
      * refreshed first, and the selection is checked afterwards.
+     *
+     * The selection alone is not proof that the Conversation is on screen: a
+     * global panel opened from the left sidebar (Plugins, Settings, ...) covers
+     * it while the selection still names the Session. That made a click a no-op
+     * for the Session the user was in. The click therefore navigates whenever a
+     * panel is active, and falls back to clearing the panel directly on a host
+     * whose `openSession` updates only the selection.
      *
      * @param ctx - Client context.
      * @param item - one queue item from the Host.
@@ -196,8 +217,11 @@ window.__ModuleLoader__.load({
         }
       }
 
+      /** @returns whether the main column shows this Conversation, not a panel covering it. */
+      const visible = () => selectedSessionId(workspace) === sessionId && activePanelId(ctx) === null
+
       for (let attempt = 0; attempt < 12; attempt += 1) {
-        if (selectedSessionId(workspace) === sessionId) return
+        if (visible()) return
         if (attempt === 0) {
           try {
             if (typeof workspace?.openSession === 'function') workspace.openSession(sessionId)
@@ -206,6 +230,14 @@ window.__ModuleLoader__.load({
             console.warn('turn-notify: cannot open the conversation', error)
             return
           }
+        } else if (selectedSessionId(workspace) === sessionId) {
+          // The selection already points here, so the remaining obstacle is the
+          // global panel. `openSession` clears it on this host; ask the layout
+          // directly as well in case a host version only updates the selection.
+          try {
+            const layout = ctx.get('layout')
+            if (typeof layout?.selectPanel === 'function') layout.selectPanel(null)
+          } catch {}
         } else if (!known() && attempt % 4 === 0) {
           try {
             await sessions?.refresh?.()

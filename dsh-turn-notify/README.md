@@ -22,7 +22,7 @@ sound switch. Settings apply immediately (no restart) and are persisted.
 | Half | File | Responsibility |
 | --- | --- | --- |
 | Host | `index.js` | Follows `session/event` (`turn/end`, `approval/asked`, `session/title`, `assistant/message`), queues one notice per event, serves `GET /dsh-turn-notify/pending?after=<seq>` and `GET/POST /dsh-turn-notify/settings`, persists the switches. |
-| Client | `client.js` | Polls the queue every 1.5 s and raises each notice with `new Notification(...)`; a click focuses the window and calls `uiWorkspace.openSession(target)`. Also registers the Settings page and its nav icon. |
+| Client | `client.js` | Polls the queue every 1.5 s and raises each notice with `new Notification(...)`; a click focuses the window and calls `uiWorkspace.openSession(target)`, which also clears a global panel (a left sidebar entry such as Plugins or Settings) still covering the Conversation. Also registers the Settings page and its nav icon. |
 | Manifest | `package.json`, `cordis.patch.yml` | Bundle row `turn-notify` with defaults for every knob. |
 
 Child-agent (`origin: 'subagent'`) sessions stay quiet unless `includeSubagents: true`.

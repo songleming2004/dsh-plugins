@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-turn-notify",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": true,
   "description": "macOS Notification Center banners for finished turns and pending approvals, with a Settings page and click-to-conversation",
   "type": "module",
