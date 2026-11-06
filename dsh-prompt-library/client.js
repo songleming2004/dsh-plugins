@@ -1,15 +1,20 @@
 /**
- * Prompt library — a tab type in the right Sidebar.
+ * Prompt library — a tab type in the right Sidebar, plus a shortcut on the New Session row.
  *
- * Two public extension points are used, both owned by `@deepseek-ai/dsh-client-ui-sidebar-right`:
+ * Four public extension points are used:
  *
  * 1. `ctx.sidebarRightTabs.register({ id, kind, title, guide })` declares the tab type and the
- *    card the right Sidebar's guide page shows for it.
+ *    card the right Sidebar's guide page shows for it (owned by `@deepseek-ai/dsh-client-ui-sidebar-right`).
  * 2. `ctx.slots.register({ name: 'sidebar.right.pane.tab', key: id })` registers the body, which
  *    receives the session standard props (`inputActions` is the composer face).
+ * 3. `ctx.slots.register({ name: 'conversation.hero.options', id })` adds the compact trigger the
+ *    New Session row carries beside the workspace and preset controls — the row a blank
+ *    conversation shows above its composer.
+ * 4. `ctx.slots.register({ name: 'shell.overlay', id })` draws the menu that trigger opens. The
+ *    frame-wide layer sits above every column, so the list is never clipped by the row.
  *
  * The prompts themselves live in this browser's localStorage under one key, shared by every open
- * occurrence of the tab, so editing in a docked pane and a floating pane stays in sync.
+ * occurrence of the tab and by the menu, so an edit anywhere is visible everywhere.
  */
 
 window.__ModuleLoader__.load({
@@ -22,6 +27,8 @@ window.__ModuleLoader__.load({
     const NS = 'dsh-prompt-library'
     /** Implementation id: the tab type's identity and the key its body registers under. */
     const ID = '@local/dsh-prompt-library'
+    /** Cell id of the New Session trigger and of the overlay menu it opens. */
+    const MENU_ID = '@local/dsh-prompt-library:prompt-menu'
     /** Kind the guide card opens by. */
     const KIND = 'dsh-prompt-library'
     /** Place of the guide card among the other products' cards. */
@@ -48,6 +55,10 @@ window.__ModuleLoader__.load({
       emptySearch: '没有匹配的提示词。',
       hint: '点击卡片插入到输入框，右侧按钮可编辑或删除。',
       inserted: '已插入到输入框',
+      heroButton: '提示词',
+      menuAria: '选择要插入的常用提示词',
+      menuEmpty: '还没有提示词。在右侧栏的「常用提示词」里添加。',
+      insertFailed: '无法插入到输入框',
       copied: '已复制到剪贴板',
       copyFailed: '复制失败，请手动选择文本',
       saved: '已保存',
@@ -77,6 +88,10 @@ window.__ModuleLoader__.load({
       emptySearch: 'No prompt matches that search.',
       hint: 'Pick a card to insert it into the composer; the buttons on the right edit or delete it.',
       inserted: 'Inserted into the composer',
+      heroButton: 'Prompts',
+      menuAria: 'Choose a saved prompt to insert',
+      menuEmpty: 'No prompts yet. Add them in the Prompt library tab.',
+      insertFailed: 'Could not insert into the composer',
       copied: 'Copied to the clipboard',
       copyFailed: 'Copy failed; select the text manually',
       saved: 'Saved',
@@ -307,6 +322,238 @@ window.__ModuleLoader__.load({
       } catch {
         return false
       }
+    }
+
+    //#endregion
+
+    //#region new-session menu
+
+    /** Width of the prompt menu, in pixels. */
+    const MENU_WIDTH = 248
+    /** Tallest the menu grows before its list scrolls. */
+    const MENU_MAX_HEIGHT = 320
+    /** Distance between the trigger and the menu. */
+    const MENU_GAP = 6
+    /** Space the menu keeps from every viewport edge. */
+    const MENU_INSET = 8
+    /** Room below the trigger needed to open downwards instead of upwards. */
+    const MENU_MIN_BELOW = 168
+
+    /**
+     * The prompt menu opens from a compact control in the New Session row and is drawn by the
+     * frame-wide overlay, which is a different render subtree with no composer props. This
+     * module-level store carries the trigger geometry and the insertion target across that
+     * boundary, the same way the library document is shared with the sidebar tab.
+     * @type {null | { anchorEl: Element, rect: { top: number, bottom: number, right: number }, insert: (content: string) => boolean }}
+     */
+    let promptMenu = null
+    const promptMenuListeners = new Set()
+
+    /**
+     * @param {null | object} next - The menu to show, or null to close it.
+     */
+    function setPromptMenu(next) {
+      promptMenu = next
+      for (const listener of [...promptMenuListeners]) listener()
+    }
+
+    /**
+     * @param {() => void} listener - Invalidation callback.
+     * @returns {() => void} Unsubscribe.
+     */
+    function subscribePromptMenu(listener) {
+      promptMenuListeners.add(listener)
+      return () => {
+        promptMenuListeners.delete(listener)
+      }
+    }
+
+    /**
+     * @returns {null | object} The open menu, re-rendering on every open and close.
+     */
+    function usePromptMenu() {
+      const [state, setState] = React.useState(promptMenu)
+      React.useEffect(() => {
+        setState(promptMenu)
+        return subscribePromptMenu(() => setState(promptMenu))
+      }, [])
+      return state
+    }
+
+    /**
+     * Place the menu under the trigger, flipping above it and clamping it inside the viewport.
+     * @param {{ top: number, bottom: number, right: number }} rect - The trigger's client rect.
+     * @returns {{ left: number, top?: number, bottom?: number, maxHeight: number }} Fixed-position style.
+     */
+    function menuGeometry(rect) {
+      const vw = window.innerWidth || 0
+      const vh = window.innerHeight || 0
+      const below = vh - rect.bottom - MENU_GAP - MENU_INSET
+      const above = rect.top - MENU_GAP - MENU_INSET
+      const flip = below < MENU_MIN_BELOW && above > below
+      const maxHeight = Math.max(120, Math.min(MENU_MAX_HEIGHT, flip ? above : below))
+      const highest = Math.max(MENU_INSET, vw - MENU_WIDTH - MENU_INSET)
+      const left = Math.min(Math.max(rect.right - MENU_WIDTH, MENU_INSET), highest)
+      return flip
+        ? { left, bottom: vh - rect.top + MENU_GAP, maxHeight }
+        : { left, top: rect.bottom + MENU_GAP, maxHeight }
+    }
+
+    /**
+     * The compact control the New Session row carries; it opens the menu for the composer below it.
+     * @param {{ t: Function, inputActions?: object }} props - Seat props plus this plugin's translate function.
+     */
+    function HeroPromptButton({ t, inputActions }) {
+      const state = usePromptMenu()
+      const buttonRef = React.useRef(null)
+      const open = state !== null
+
+      React.useEffect(() => () => {
+        // The New Session row disappears once the conversation starts; close with it.
+        if (promptMenu !== null && !document.contains(promptMenu.anchorEl)) setPromptMenu(null)
+      }, [])
+
+      const toggle = () => {
+        if (promptMenu !== null) {
+          setPromptMenu(null)
+          return
+        }
+        const el = buttonRef.current
+        if (el === null) return
+        const rect = el.getBoundingClientRect()
+        setPromptMenu({
+          anchorEl: el,
+          rect: { top: rect.top, bottom: rect.bottom, right: rect.right },
+          insert: (content) => insertIntoComposer(inputActions, content),
+        })
+      }
+
+      return h(
+        'button',
+        {
+          ref: buttonRef,
+          type: 'button',
+          className: 'dshpl-hero',
+          'data-dshpl-anchor': 'true',
+          title: t('heroButton'),
+          'aria-haspopup': 'menu',
+          'aria-expanded': open ? 'true' : 'false',
+          onClick: toggle,
+        },
+        h(LibraryGlyph, { size: 14 }),
+        h('span', {}, t('heroButton')),
+      )
+    }
+
+    /**
+     * The open menu itself, in the frame-wide overlay.
+     * @param {{ state: object, t: Function }} props - The open menu and this plugin's translate function.
+     */
+    function PromptMenu({ state, t }) {
+      const doc = useDoc()
+      const [error, setError] = React.useState(null)
+      const rootRef = React.useRef(null)
+      const firstRef = React.useRef(null)
+
+      React.useEffect(() => {
+        if (firstRef.current !== null) firstRef.current.focus()
+      }, [])
+
+      React.useEffect(() => {
+        const inside = (target) => {
+          const root = rootRef.current
+          return root !== null && target instanceof Node && root.contains(target)
+        }
+        const onPointerDown = (event) => {
+          if (inside(event.target)) return
+          if (event.target instanceof Element && event.target.closest('[data-dshpl-anchor]') !== null) return
+          setPromptMenu(null)
+        }
+        const onKeyDown = (event) => {
+          if (event.key !== 'Escape') return
+          event.preventDefault()
+          const el = state.anchorEl
+          setPromptMenu(null)
+          if (el !== null && el !== undefined && typeof el.focus === 'function') el.focus()
+        }
+        const onScroll = (event) => {
+          if (inside(event.target)) return
+          setPromptMenu(null)
+        }
+        const onResize = () => setPromptMenu(null)
+
+        document.addEventListener('pointerdown', onPointerDown, true)
+        document.addEventListener('keydown', onKeyDown, true)
+        window.addEventListener('scroll', onScroll, true)
+        window.addEventListener('resize', onResize)
+        return () => {
+          document.removeEventListener('pointerdown', onPointerDown, true)
+          document.removeEventListener('keydown', onKeyDown, true)
+          window.removeEventListener('scroll', onScroll, true)
+          window.removeEventListener('resize', onResize)
+        }
+      }, [state])
+
+      const pick = (prompt) => {
+        if (state.insert(prompt.content)) {
+          setPromptMenu(null)
+          return
+        }
+        if (copyText(prompt.content)) {
+          setPromptMenu(null)
+          return
+        }
+        setError(t('insertFailed'))
+      }
+
+      const placement = menuGeometry(state.rect)
+      const style = {
+        width: MENU_WIDTH + 'px',
+        maxHeight: placement.maxHeight + 'px',
+        left: placement.left + 'px',
+      }
+      if (placement.top === undefined) style.bottom = placement.bottom + 'px'
+      else style.top = placement.top + 'px'
+
+      const rows = doc.prompts.length === 0
+        ? [h('div', { className: 'dshpl-menu-empty', key: 'empty' }, t('menuEmpty'))]
+        : doc.prompts.map((prompt, index) => h(
+          'button',
+          {
+            key: prompt.id,
+            ref: index === 0 ? firstRef : undefined,
+            type: 'button',
+            role: 'menuitem',
+            className: 'dshpl-menu-item',
+            onClick: () => pick(prompt),
+          },
+          h('span', { className: 'dshpl-menu-title' }, prompt.title),
+        ))
+
+      return h(
+        'div',
+        {
+          ref: rootRef,
+          className: 'dshpl-menu',
+          role: 'menu',
+          'aria-label': t('menuAria'),
+          style,
+        },
+        rows,
+        error === null
+          ? null
+          : h('div', { className: 'dshpl-menu-error', role: 'status' }, error),
+      )
+    }
+
+    /**
+     * The overlay half of the menu: mounted once by the frame-wide layer, renders only when open.
+     * @param {{ t: Function }} props - This plugin's translate function.
+     */
+    function PromptMenuOverlay({ t }) {
+      const state = usePromptMenu()
+      if (state === null) return null
+      return h(PromptMenu, { state, t })
     }
 
     //#endregion
@@ -632,6 +879,92 @@ window.__ModuleLoader__.load({
   font-size: 12px;
 }
 .dshpl-notice[data-tone="error"] { color: var(--dsw-alias-state-error-primary); }
+.dshpl-hero {
+  flex: none;
+  height: 26px;
+  padding: 0 7px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid transparent;
+  border-radius: var(--dsw-radius-sm, 8px);
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.dshpl-hero:hover {
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-primary);
+}
+.dshpl-hero:focus-visible {
+  outline: 2px solid var(--dsw-alias-brand-primary);
+  outline-offset: 1px;
+}
+.dshpl-hero[aria-expanded="true"] {
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-primary);
+}
+.dshpl-menu {
+  position: fixed;
+  z-index: 60;
+  box-sizing: border-box;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: var(--dsw-radius-md, 10px);
+  background: var(--dsw-alias-bg-layer-1);
+  box-shadow: 0 12px 30px rgb(0 0 0 / 16%);
+  color: var(--dsw-alias-label-primary);
+  font-size: 13px;
+  line-height: 1.35;
+}
+.dshpl-menu-item {
+  flex: none;
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 9px;
+  border: none;
+  border-radius: var(--dsw-radius-sm, 6px);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.dshpl-menu-item:hover { background: var(--dsw-alias-bg-layer-2); }
+.dshpl-menu-item:focus-visible {
+  outline: 2px solid var(--dsw-alias-brand-primary);
+  outline-offset: -2px;
+}
+.dshpl-menu-title {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dshpl-menu-empty {
+  padding: 10px 9px;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.dshpl-menu-error {
+  margin-top: 4px;
+  padding: 6px 9px;
+  border-top: 1px solid var(--dsw-alias-border-l1);
+  color: var(--dsw-alias-state-error-primary);
+  font-size: 12px;
+}
 .dshpl-visually-hidden {
   position: absolute;
   width: 1px;
@@ -978,6 +1311,26 @@ window.__ModuleLoader__.load({
             key: ID,
           }, (props) => h(PromptLibraryBody, { ...props, t }))),
           'dsh-prompt-library: tab body',
+        )
+
+        // The New Session row (the one carrying the workspace and preset controls) is the only
+        // place a blank conversation offers a composer trigger, so the compact button lives there.
+        ctx.effect(
+          () => ctx.slots.inject('conversation.hero.options', () => ctx.slots.register({
+            name: 'conversation.hero.options',
+            id: MENU_ID,
+          }, (props) => h(HeroPromptButton, { ...props, t }))),
+          'dsh-prompt-library: New Session trigger',
+        )
+
+        // The menu is anchored to that trigger but drawn in the frame-wide layer, which sits above
+        // every column and outside their clipping containers.
+        ctx.effect(
+          () => ctx.slots.inject('shell.overlay', () => ctx.slots.register({
+            name: 'shell.overlay',
+            id: MENU_ID,
+          }, () => h(PromptMenuOverlay, { t }))),
+          'dsh-prompt-library: prompt menu overlay',
         )
       },
     }

@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Prompt library",
-    "description": "A tab in the right Sidebar that keeps your frequently used prompts: pick one into the composer, and edit each prompt's title and text."
+    "description": "A prompt library in the right Sidebar plus a prompt button on the New Session row: pick a saved prompt into the composer, and edit each prompt's title and text."
   }
 }
