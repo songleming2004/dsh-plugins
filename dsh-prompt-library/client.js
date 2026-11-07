@@ -427,8 +427,12 @@ window.__ModuleLoader__.load({
           active: false,
           clone: null,
           gap: null,
-          metrics: null,
+          targets: [],
+          height: 0,
+          grabOffset: 0,
+          lastCenter: 0,
           dropBefore: null,
+          sourceDisplay: null,
           order,
           dispose: null,
         }
@@ -464,13 +468,11 @@ window.__ModuleLoader__.load({
           }
           const before = press.dropBefore
           const index = press.order.indexOf(press.id)
-          let target = index
-          if (before !== null && index !== -1) {
-            target = before > index ? before - 1 : before
-            if (target < 0 || target > press.order.length - 1) target = index
-          }
+          const target = before === null ? index : before
           end(true)
-          if (target !== index && index !== -1) latest.current.commit(press.order, index, target)
+          if (target !== index && index !== -1 && target >= 0 && target < press.order.length) {
+            latest.current.commit(press.order, index, target)
+          }
         }
 
         const onCancel = (next) => {
@@ -500,25 +502,38 @@ window.__ModuleLoader__.load({
           card.removeAttribute('data-dragging')
         }
 
+        const placeGap = () => {
+          if (press.gap === null) return
+          if (press.dropBefore < press.targets.length) list.insertBefore(press.gap, press.targets[press.dropBefore])
+          else list.appendChild(press.gap)
+        }
+
         const setMarks = (x, y, allowScroll) => {
           press.lastX = x
           press.lastY = y
-          const cardsNow = [...list.querySelectorAll('.dshpl-card')]
+          if (press.gap === null) return
           const bounds = list.getBoundingClientRect()
-          const contentY = y - bounds.top + list.scrollTop
-          let before = cardsNow.length
-          for (let index = 0; index < press.metrics.length; index += 1) {
-            const metric = press.metrics[index]
-            if (contentY < metric.top + metric.height / 2) {
-              before = index
-              break
+          // Compare the lifted card's center (not the pointer) with the remaining cards, so a
+          // drag of one card height always swaps one place no matter where it was grabbed.
+          const center = y - press.grabOffset + press.height / 2 - bounds.top + list.scrollTop
+          const delta = center - press.lastCenter
+          if (delta !== 0) {
+            const centers = press.targets.map((item) => {
+              const itemRect = item.getBoundingClientRect()
+              return itemRect.top + itemRect.height / 2 - bounds.top + list.scrollTop
+            })
+            if (delta > 0) {
+              while (press.dropBefore < centers.length && center >= centers[press.dropBefore]) {
+                press.dropBefore += 1
+              }
+            } else {
+              while (press.dropBefore > 0 && center <= centers[press.dropBefore - 1]) {
+                press.dropBefore -= 1
+              }
             }
           }
-          press.dropBefore = before
-          if (press.gap !== null) {
-            if (before < cardsNow.length) list.insertBefore(press.gap, cardsNow[before])
-            else list.appendChild(press.gap)
-          }
+          press.lastCenter = center
+          placeGap()
           if (allowScroll) {
             if (y < bounds.top + REORDER_SCROLL_EDGE_PX) list.scrollTop -= 10
             else if (y > bounds.bottom - REORDER_SCROLL_EDGE_PX) list.scrollTop += 10
@@ -539,6 +554,7 @@ window.__ModuleLoader__.load({
           list.removeEventListener('scroll', onScroll)
           if (press.clone !== null) press.clone.remove()
           if (press.gap !== null) press.gap.remove()
+          if (press.active) card.style.display = press.sourceDisplay ?? ''
           clearMarks()
           document.documentElement.classList.remove('dshpl-reordering')
           try {
@@ -575,24 +591,31 @@ window.__ModuleLoader__.load({
           clone.style.top = rect.top + 'px'
           document.body.appendChild(clone)
           press.clone = clone
-          const bounds = list.getBoundingClientRect()
-          press.metrics = [...list.querySelectorAll('.dshpl-card')].map((item) => {
-            const itemRect = item.getBoundingClientRect()
-            return { top: itemRect.top - bounds.top + list.scrollTop, height: itemRect.height }
-          })
-          const gap = document.createElement('div')
-          gap.className = 'dshpl-drop-gap'
-          gap.style.height = rect.height + 'px'
-          list.appendChild(gap)
-          press.gap = gap
-          card.setAttribute('data-dragging', 'true')
-          document.documentElement.classList.add('dshpl-reordering')
-          list.addEventListener('scroll', onScroll, { passive: true })
+          press.height = rect.height
+          press.grabOffset = press.startY - rect.top
+          // The lifted card leaves the flow; the dashed gap below is its only placeholder, so
+          // every position is measured against the cards that stay.
+          press.targets = [...list.querySelectorAll('.dshpl-card')].filter((item) => item !== card)
           try {
             card.setPointerCapture(press.pointerId)
           } catch {
             // Synthetic pointers cannot be captured; the window listeners still receive the move.
           }
+          press.sourceDisplay = card.style.display
+          card.style.display = 'none'
+          card.setAttribute('data-dragging', 'true')
+          const gap = document.createElement('div')
+          gap.className = 'dshpl-drop-gap'
+          gap.style.height = rect.height + 'px'
+          if (card.nextElementSibling === null) list.appendChild(gap)
+          else list.insertBefore(gap, card.nextElementSibling)
+          press.gap = gap
+          const bounds = list.getBoundingClientRect()
+          press.dropBefore = Math.max(0, Math.min(press.order.indexOf(id), press.targets.length))
+          press.lastCenter = press.startY - press.grabOffset + press.height / 2 - bounds.top + list.scrollTop
+          placeGap()
+          document.documentElement.classList.add('dshpl-reordering')
+          list.addEventListener('scroll', onScroll, { passive: true })
           try {
             if (typeof navigator.vibrate === 'function') navigator.vibrate(8)
           } catch {
