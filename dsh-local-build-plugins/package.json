@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-local-build-plugins",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": true,
   "description": "Local build plugins bundle: groups local builds below installed plugins and mounts the Local build plugins tab as a second component",
   "type": "module",

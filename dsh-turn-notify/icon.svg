@@ -1,5 +1,11 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Turn result notifications">
-  <path d="M16 10h32a8 8 0 0 1 8 8v22a8 8 0 0 1-8 8H34L22 58v-10h-6a8 8 0 0 1-8-8V18a8 8 0 0 1 8-8z" fill="#247bbf"/>
-  <path d="M20 22h24M20 30h18M20 38h12" stroke="#ffffff" stroke-width="4" stroke-linecap="round"/>
-  <circle cx="48" cy="12" r="7" fill="#f25a5a"/>
+<svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Turn result notifications">
+  <path d="M18 7.2C13.9 7.2 10.6 10.5 10.6 14.6V18.2L9.2 21.1C8.8 21.9 9.4 22.8 10.3 22.8H25.7C26.6 22.8 27.2 21.9 26.8 21.1L25.4 18.2V14.6C25.4 10.5 22.1 7.2 18 7.2Z" fill="url(#tn-bell)"/>
+  <path d="M15.5 24.6C15.5 26 16.6 27.2 18 27.2C19.4 27.2 20.5 26 20.5 24.6H15.5Z" fill="url(#tn-bell)"/>
+  <circle cx="26" cy="8.9" r="3.1" fill="#F2AF63"/>
+  <defs>
+    <linearGradient id="tn-bell" x1="18" y1="7.2" x2="18" y2="27.2" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#67C7FE"/>
+      <stop offset="1" stop-color="#3F77D8"/>
+    </linearGradient>
+  </defs>
 </svg>

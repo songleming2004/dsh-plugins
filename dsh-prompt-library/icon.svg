@@ -1,7 +1,12 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-label="Prompt library">
-  <rect x="2" y="2" width="60" height="60" rx="14" fill="#EDF2FA"/>
-  <rect x="14" y="15" width="30" height="7" rx="3.5" fill="#247BBF"/>
-  <rect x="14" y="27" width="36" height="5" rx="2.5" fill="#9DB4CC"/>
-  <rect x="14" y="37" width="26" height="5" rx="2.5" fill="#9DB4CC"/>
-  <path d="M45 41.5l2.35 5.1 5.15.62-3.85 3.52.98 5.26L45 53.35l-4.63 2.65.98-5.26-3.85-3.52 5.15-.62z" fill="#F0A32E"/>
+<svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Prompt library">
+  <rect x="7.8" y="9.2" width="17" height="10" rx="2.4" fill="#7CB7FF" fill-opacity="0.5"/>
+  <rect x="10.6" y="12.6" width="17.4" height="13.6" rx="2.6" fill="url(#pl-card)"/>
+  <path d="M14.6 17.8H23.6M14.6 21.3H20.6" stroke="#FFFFFF" stroke-width="1.7" stroke-linecap="round"/>
+  <path d="M26.9 6.7C27.28 8.75 28.1 9.57 30.15 9.95C28.1 10.33 27.28 11.15 26.9 13.2C26.52 11.15 25.7 10.33 23.65 9.95C25.7 9.57 26.52 8.75 26.9 6.7Z" fill="#F2AF63"/>
+  <defs>
+    <linearGradient id="pl-card" x1="11" y1="13" x2="27" y2="27" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#6FB2EE"/>
+      <stop offset="1" stop-color="#3E58D6"/>
+    </linearGradient>
+  </defs>
 </svg>

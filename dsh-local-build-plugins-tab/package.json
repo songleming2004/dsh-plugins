@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-local-build-plugins-tab",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": true,
   "description": "Local build plugins tab for the Plugins page: lists local builds with per-plugin switches and a one-click disable-others action",
   "type": "module",
