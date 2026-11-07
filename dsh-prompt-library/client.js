@@ -65,8 +65,8 @@ window.__ModuleLoader__.load({
       contentPlaceholder: '输入提示词内容，选中卡片时会插入到输入框光标处',
       empty: '还没有提示词，点「新建」写下第一条。',
       emptySearch: '没有匹配的提示词。',
-      hint: '点击卡片插入；输入框未修改时再点会替换上一条。右侧按钮可编辑或删除。',
-      hintSettings: '点击卡片编辑内容，右侧按钮可复制或删除。',
+      hint: '点击插入，长按拖动排序；输入框未修改时再点会替换。右侧按钮可编辑或删除。',
+      hintSettings: '点击编辑，长按拖动排序；右侧按钮可复制或删除。',
       settingsIntro: '这里维护「提示词」按钮里的内容。右侧栏的「常用提示词」面板用的是同一份列表，改一边两边都会更新。',
       inserted: '已插入到输入框',
       replaced: '已替换提示词',
@@ -108,8 +108,8 @@ window.__ModuleLoader__.load({
       contentPlaceholder: 'Write the prompt; picking the card inserts it at the composer caret',
       empty: 'No prompts yet. Choose “New” to add the first one.',
       emptySearch: 'No prompt matches that search.',
-      hint: 'Pick a card to insert; picking another replaces it while the draft is unchanged. The buttons on the right edit or delete it.',
-      hintSettings: 'Pick a card to edit it; the buttons on the right copy or delete it.',
+      hint: 'Pick to insert; press and hold to reorder. Picking another replaces it while the draft is unchanged. The buttons on the right edit or delete it.',
+      hintSettings: 'Pick to edit; press and hold to reorder. The buttons on the right copy or delete it.',
       settingsIntro: 'These are the prompts behind the prompt button. The right Sidebar\'s Prompt library tab shows the same list, so an edit in either place updates both.',
       inserted: 'Inserted into the composer',
       replaced: 'Replaced the prompt',
@@ -358,6 +358,260 @@ window.__ModuleLoader__.load({
         return subscribeDoc(() => setDoc(currentDoc()))
       }, [])
       return doc
+    }
+
+    //#endregion
+
+    //#region card order
+
+    /** Hold this long on a card body before the card becomes draggable. */
+    const REORDER_HOLD_MS = 420
+    /** Pointer travel that abandons the hold instead of starting a drag. */
+    const REORDER_SLOP_PX = 8
+    /** Height of the strip at either end of the list that scrolls while dragging. */
+    const REORDER_SCROLL_EDGE_PX = 30
+
+    /**
+     * Long-press reordering for the cards of one list.
+     *
+     * The pressed card is cloned into a fixed-position layer so the drag is not clipped by the
+     * list's scroll box, while a dashed gap inside the list marks where it would land. Only the
+     * cards currently visible take part; the commit callback decides how their new order maps
+     * back into the full document.
+     *
+     * @param {{ current: HTMLElement | null }} listRef - Ref to the list element.
+     * @param {string[]} orderIds - Visible prompt ids, top to bottom.
+     * @param {(ids: string[], from: number, to: number) => void} commit - Applies one reorder.
+     * @param {{ current: boolean }} suppressClickRef - Set when the release must not activate the card.
+     * @returns {(event: object) => void} Pointer-down handler for the list.
+     */
+    function useCardReorder(listRef, orderIds, commit, suppressClickRef) {
+      const latest = React.useRef({ orderIds, commit })
+      latest.current = { orderIds, commit }
+      const pressRef = React.useRef(null)
+
+      React.useEffect(() => () => {
+        const press = pressRef.current
+        if (press !== null && typeof press.dispose === 'function') press.dispose()
+      }, [])
+
+      return React.useCallback((event) => {
+        if (pressRef.current !== null) return
+        const target = event.target
+        if (!(target instanceof Element)) return
+        const main = target.closest('.dshpl-card-main')
+        if (main === null) return
+        const card = main.closest('.dshpl-card')
+        const list = listRef.current
+        if (card === null || list === null || !list.contains(card)) return
+        if (event.pointerType === 'mouse' && event.button !== 0) return
+        if (event.isPrimary === false) return
+        const id = card.dataset.promptId
+        if (typeof id !== 'string' || id === '') return
+        const cards = [...list.querySelectorAll('.dshpl-card')]
+        const from = cards.indexOf(card)
+        if (from === -1) return
+        const order = latest.current.orderIds.slice()
+        if (order[from] !== id) return
+
+        const press = {
+          id,
+          card,
+          list,
+          pointerId: event.pointerId,
+          startX: event.clientX,
+          startY: event.clientY,
+          lastX: event.clientX,
+          lastY: event.clientY,
+          timer: 0,
+          active: false,
+          clone: null,
+          gap: null,
+          metrics: null,
+          dropBefore: null,
+          order,
+          dispose: null,
+        }
+        pressRef.current = press
+
+        const onMove = (next) => {
+          if (pressRef.current !== press || next.pointerId !== press.pointerId) return
+          if (!press.active) {
+            if (Math.hypot(next.clientX - press.startX, next.clientY - press.startY) > REORDER_SLOP_PX) {
+              end(false)
+            }
+            return
+          }
+          next.preventDefault()
+          press.lastX = next.clientX
+          press.lastY = next.clientY
+          if (press.clone !== null) {
+            press.clone.style.transform = 'translate3d(' + (next.clientX - press.startX) + 'px,'
+              + (next.clientY - press.startY) + 'px,0)'
+          }
+          setMarks(next.clientX, next.clientY, true)
+        }
+
+        const onTouchMove = (next) => {
+          if (press.active) next.preventDefault()
+        }
+
+        const onUp = (next) => {
+          if (pressRef.current !== press || next.pointerId !== press.pointerId) return
+          if (!press.active) {
+            end(false)
+            return
+          }
+          const before = press.dropBefore
+          const index = press.order.indexOf(press.id)
+          let target = index
+          if (before !== null && index !== -1) {
+            target = before > index ? before - 1 : before
+            if (target < 0 || target > press.order.length - 1) target = index
+          }
+          end(true)
+          if (target !== index && index !== -1) latest.current.commit(press.order, index, target)
+        }
+
+        const onCancel = (next) => {
+          if (next !== undefined && next.pointerId !== undefined && next.pointerId !== press.pointerId) return
+          end(press.active)
+        }
+
+        const onKey = (event) => {
+          if (event.key !== 'Escape') return
+          event.preventDefault()
+          end(true)
+        }
+
+        const onContext = (event) => {
+          event.preventDefault()
+        }
+
+        const onScroll = () => {
+          if (press.active) setMarks(press.lastX, press.lastY, false)
+        }
+
+        const onBlur = () => {
+          onCancel()
+        }
+
+        const clearMarks = () => {
+          card.removeAttribute('data-dragging')
+        }
+
+        const setMarks = (x, y, allowScroll) => {
+          press.lastX = x
+          press.lastY = y
+          const cardsNow = [...list.querySelectorAll('.dshpl-card')]
+          const bounds = list.getBoundingClientRect()
+          const contentY = y - bounds.top + list.scrollTop
+          let before = cardsNow.length
+          for (let index = 0; index < press.metrics.length; index += 1) {
+            const metric = press.metrics[index]
+            if (contentY < metric.top + metric.height / 2) {
+              before = index
+              break
+            }
+          }
+          press.dropBefore = before
+          if (press.gap !== null) {
+            if (before < cardsNow.length) list.insertBefore(press.gap, cardsNow[before])
+            else list.appendChild(press.gap)
+          }
+          if (allowScroll) {
+            if (y < bounds.top + REORDER_SCROLL_EDGE_PX) list.scrollTop -= 10
+            else if (y > bounds.bottom - REORDER_SCROLL_EDGE_PX) list.scrollTop += 10
+          }
+        }
+
+        const end = (suppress) => {
+          if (pressRef.current !== press) return
+          pressRef.current = null
+          window.clearTimeout(press.timer)
+          window.removeEventListener('pointermove', onMove, { capture: true })
+          window.removeEventListener('pointerup', onUp, { capture: true })
+          window.removeEventListener('pointercancel', onCancel, { capture: true })
+          window.removeEventListener('keydown', onKey, { capture: true })
+          window.removeEventListener('contextmenu', onContext, { capture: true })
+          window.removeEventListener('touchmove', onTouchMove, { capture: true })
+          window.removeEventListener('blur', onBlur)
+          list.removeEventListener('scroll', onScroll)
+          if (press.clone !== null) press.clone.remove()
+          if (press.gap !== null) press.gap.remove()
+          clearMarks()
+          document.documentElement.classList.remove('dshpl-reordering')
+          try {
+            if (card.hasPointerCapture(press.pointerId)) card.releasePointerCapture(press.pointerId)
+          } catch {
+            // A synthetic pointer, or one the browser already released, has no capture to drop.
+          }
+          if (suppress) {
+            suppressClickRef.current = true
+            window.setTimeout(() => {
+              suppressClickRef.current = false
+            }, 600)
+          }
+        }
+
+        const activate = () => {
+          if (pressRef.current !== press || !card.isConnected) {
+            end(false)
+            return
+          }
+          press.timer = 0
+          press.active = true
+          const rect = card.getBoundingClientRect()
+          const clone = card.cloneNode(true)
+          clone.classList.add('dshpl-drag-clone')
+          clone.removeAttribute('data-dragging')
+          clone.removeAttribute('data-prompt-id')
+          clone.setAttribute('inert', '')
+          clone.setAttribute('aria-hidden', 'true')
+          for (const button of clone.querySelectorAll('button')) button.tabIndex = -1
+          clone.style.width = rect.width + 'px'
+          clone.style.height = rect.height + 'px'
+          clone.style.left = rect.left + 'px'
+          clone.style.top = rect.top + 'px'
+          document.body.appendChild(clone)
+          press.clone = clone
+          const bounds = list.getBoundingClientRect()
+          press.metrics = [...list.querySelectorAll('.dshpl-card')].map((item) => {
+            const itemRect = item.getBoundingClientRect()
+            return { top: itemRect.top - bounds.top + list.scrollTop, height: itemRect.height }
+          })
+          const gap = document.createElement('div')
+          gap.className = 'dshpl-drop-gap'
+          gap.style.height = rect.height + 'px'
+          list.appendChild(gap)
+          press.gap = gap
+          card.setAttribute('data-dragging', 'true')
+          document.documentElement.classList.add('dshpl-reordering')
+          list.addEventListener('scroll', onScroll, { passive: true })
+          try {
+            card.setPointerCapture(press.pointerId)
+          } catch {
+            // Synthetic pointers cannot be captured; the window listeners still receive the move.
+          }
+          try {
+            if (typeof navigator.vibrate === 'function') navigator.vibrate(8)
+          } catch {
+            // Vibration is an optional nicety and may be blocked.
+          }
+          setMarks(press.lastX, press.lastY, false)
+        }
+
+        press.dispose = () => end(false)
+
+        window.addEventListener('pointermove', onMove, { capture: true, passive: false })
+        window.addEventListener('pointerup', onUp, { capture: true })
+        window.addEventListener('pointercancel', onCancel, { capture: true })
+        window.addEventListener('keydown', onKey, { capture: true })
+        window.addEventListener('contextmenu', onContext, { capture: true })
+        window.addEventListener('touchmove', onTouchMove, { capture: true, passive: false })
+        window.addEventListener('blur', onBlur)
+        press.timer = window.setTimeout(activate, REORDER_HOLD_MS)
+      }, [listRef, suppressClickRef])
     }
 
     //#endregion
@@ -988,6 +1242,7 @@ window.__ModuleLoader__.load({
   gap: 8px;
 }
 .dshpl-card {
+  position: relative;
   display: flex;
   align-items: stretch;
   gap: 2px;
@@ -996,6 +1251,14 @@ window.__ModuleLoader__.load({
   background: var(--dsw-alias-bg-layer-1);
 }
 .dshpl-card:hover { border-color: var(--dsw-alias-border-l2); }
+.dshpl-card[data-dragging="true"] { opacity: .35; }
+.dshpl-drop-gap {
+  flex: none;
+  box-sizing: border-box;
+  border: 1px dashed color-mix(in srgb, var(--dsw-alias-brand-primary) 55%, transparent);
+  border-radius: var(--dsw-radius-sm, 8px);
+  background: color-mix(in srgb, var(--dsw-alias-brand-primary) 7%, transparent);
+}
 .dshpl-card-main {
   flex: 1;
   min-width: 0;
@@ -1010,6 +1273,7 @@ window.__ModuleLoader__.load({
   font: inherit;
   text-align: left;
   cursor: pointer;
+  -webkit-touch-callout: none;
 }
 .dshpl-card-main:hover { background: var(--dsw-alias-bg-layer-2); }
 .dshpl-card-main:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: -2px; }
@@ -1044,6 +1308,21 @@ window.__ModuleLoader__.load({
   align-items: center;
   padding-right: 4px;
 }
+.dshpl-drag-clone {
+  position: fixed;
+  z-index: 1300;
+  box-sizing: border-box;
+  margin: 0;
+  pointer-events: none;
+  cursor: grabbing;
+  opacity: .98;
+  background: var(--dsw-alias-bg-layer-1);
+  box-shadow: 0 14px 34px rgb(0 0 0 / 20%), 0 2px 8px rgb(0 0 0 / 12%);
+  will-change: transform;
+}
+html.dshpl-reordering,
+html.dshpl-reordering * { cursor: grabbing !important; }
+html.dshpl-reordering { user-select: none; }
 .dshpl-icon {
   width: 24px;
   height: 24px;
@@ -1422,7 +1701,7 @@ window.__ModuleLoader__.load({
       const hiddenTags = tags.length - shownTags.length
       return h(
         'div',
-        { className: 'dshpl-card' },
+        { className: 'dshpl-card', 'data-prompt-id': prompt.id },
         h(
           'button',
           {
@@ -1688,6 +1967,37 @@ window.__ModuleLoader__.load({
         return (prompt.tags ?? []).some((tag) => tag.toLowerCase().includes(needle))
       })
       const filtering = needle !== '' || activeTag !== null
+      const orderIds = visible.map((prompt) => prompt.id)
+      const listRef = React.useRef(null)
+      const suppressClickRef = React.useRef(false)
+
+      /**
+       * Put the visible cards into their dropped order, keeping the slots that hidden prompts
+       * occupy in the full document so a filtered list never scatters the rest of the library.
+       */
+      const reorder = React.useCallback((ids, from, to) => {
+        editDoc((current) => {
+          const moving = ids.slice()
+          const [moved] = moving.splice(from, 1)
+          if (moved === undefined) return current
+          moving.splice(to, 0, moved)
+          const visibleIds = new Set(ids)
+          const slots = []
+          current.prompts.forEach((prompt, index) => {
+            if (visibleIds.has(prompt.id)) slots.push(index)
+          })
+          if (slots.length !== moving.length) return current
+          const byId = new Map(current.prompts.map((prompt) => [prompt.id, prompt]))
+          const prompts = current.prompts.slice()
+          slots.forEach((slot, index) => {
+            const prompt = byId.get(moving[index])
+            if (prompt !== undefined) prompts[slot] = prompt
+          })
+          return { ...current, prompts }
+        })
+      }, [])
+
+      const onCardPointerDown = useCardReorder(listRef, orderIds, reorder, suppressClickRef)
 
       const insert = (prompt) => {
         setConfirmId(null)
@@ -1858,7 +2168,22 @@ window.__ModuleLoader__.load({
               h('span', { className: 'dshpl-tag-count' }, String(count)),
             )),
           ),
-        h('div', { className: 'dshpl-list', key: 'list' }, items),
+        h(
+          'div',
+          {
+            className: 'dshpl-list',
+            key: 'list',
+            ref: listRef,
+            onPointerDown: onCardPointerDown,
+            onClickCapture: (event) => {
+              if (!suppressClickRef.current) return
+              suppressClickRef.current = false
+              event.preventDefault()
+              event.stopPropagation()
+            },
+          },
+          items,
+        ),
         notice === null
           ? null
           : h('div', { className: 'dshpl-notice', key: 'notice', role: 'status', 'data-tone': notice.tone }, notice.text),
