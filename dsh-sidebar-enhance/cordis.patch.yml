@@ -1,0 +1,7 @@
+# Sidebar enhance is entirely a browser-side bundle: its two components live in
+# ./client.js and the Host has nothing to register. The row still exists so the
+# Plugin Manager can list, enable, and describe the bundle as one plugin.
+- insert:
+    - id: dsh-sidebar-enhance
+      name: '@local/dsh-sidebar-enhance'
+      config: {}

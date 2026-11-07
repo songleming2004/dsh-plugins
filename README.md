@@ -12,6 +12,7 @@ plugin.
 | `dsh-local-build-plugins` | `@local/dsh-local-build-plugins` | Groups locally built plugins into their own section in Plugin Manager. |
 | `dsh-local-build-plugins-tab` | `@local/dsh-local-build-plugins-tab` | Adds the "Local build" tab to Plugin Manager. |
 | `dsh-turn-notify` | `@local/dsh-turn-notify` | Notifies when a turn finishes. |
+| `dsh-sidebar-enhance` | `@local/dsh-sidebar-enhance` | One plugin with two components: caps the right Sidebar's first-open width at one third of "panel + conversation" (per Session, per app run), and makes long Sidebar pages scroll from the first card with an always-visible scrollbar and bottom breathing room under the last card. |
 
 ## Shape of one bundle
 

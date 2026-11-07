@@ -1,0 +1,11 @@
+<svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Sidebar enhance">
+  <rect x="6" y="7" width="24" height="22" rx="4" fill="url(#se-frame)"/>
+  <rect x="22" y="10.2" width="4.8" height="15.6" rx="1.8" fill="#FFFFFF" fill-opacity="0.9"/>
+  <path d="M12.6 14.6V21.4M12.6 21.4L10.5 19.3M12.6 21.4L14.7 19.3M12.6 14.6L10.5 16.7M12.6 14.6L14.7 16.7" stroke="#FFFFFF" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <defs>
+    <linearGradient id="se-frame" x1="6" y1="7" x2="30" y2="29" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#6FB2EE"/>
+      <stop offset="1" stop-color="#3E58D6"/>
+    </linearGradient>
+  </defs>
+</svg>
