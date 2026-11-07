@@ -82,6 +82,13 @@ window.__ModuleLoader__.load({
       newPromptTitle: '未命名提示词',
       countPrefix: '共 ',
       countSuffix: ' 条',
+      tagsLabel: '标签',
+      tagPlaceholder: '添加标签…',
+      removeTag: '移除标签',
+      tagsHint: '回车或逗号添加标签，最多 8 个',
+      tagsFull: '最多 8 个标签',
+      filterAll: '全部',
+      filterByTag: '按标签筛选',
     }
 
     const en = {
@@ -118,6 +125,13 @@ window.__ModuleLoader__.load({
       newPromptTitle: 'Untitled prompt',
       countPrefix: '',
       countSuffix: ' prompts',
+      tagsLabel: 'Tags',
+      tagPlaceholder: 'Add a tag…',
+      removeTag: 'Remove tag',
+      tagsHint: 'Press Enter or comma to add a tag; up to 8',
+      tagsFull: 'Up to 8 tags',
+      filterAll: 'All',
+      filterByTag: 'Filter by tag',
     }
 
     /** Every locale the Web app ships, so a non-English, non-Chinese UI still reads English. */
@@ -131,18 +145,22 @@ window.__ModuleLoader__.load({
       {
         title: '代码审查',
         content: '请审查下面这段代码，指出潜在的 bug、性能问题和可读性问题，并给出具体的修改建议：\n\n',
+        tags: ['代码'],
       },
       {
         title: '补充单元测试',
         content: '为下面的代码补充单元测试，覆盖正常路径与边界情况，并保持与项目现有测试风格一致：\n\n',
+        tags: ['代码', '测试'],
       },
       {
         title: '解释代码',
         content: '请逐步解释下面这段代码的作用、关键流程和潜在的坑：\n\n',
+        tags: ['代码', '学习'],
       },
       {
         title: '精简重写',
         content: '请在不改变含义的前提下精简并重写下面这段文字，保持专业、准确、简洁：\n\n',
+        tags: ['写作'],
       },
     ]
 
@@ -172,6 +190,57 @@ window.__ModuleLoader__.load({
       return line.length > 40 ? line.slice(0, 40) + '…' : line
     }
 
+    /** Most tags one prompt may carry. */
+    const MAX_TAGS = 8
+    /** Longest tag the editor accepts, in characters. */
+    const MAX_TAG_LENGTH = 24
+
+    /**
+     * Normalize one tag for storage and comparison: drop a leading hash, collapse whitespace,
+     * clip overlong text, and return '' for anything that carries no text.
+     * @param {unknown} value - Raw tag text.
+     * @returns {string} The usable tag, or ''.
+     */
+    function normalizeTag(value) {
+      if (typeof value !== 'string') return ''
+      const tag = value.replace(/^#+/u, '').replace(/\s+/gu, ' ').trim()
+      if (tag === '') return ''
+      return tag.length > MAX_TAG_LENGTH ? tag.slice(0, MAX_TAG_LENGTH) : tag
+    }
+
+    /**
+     * Normalize a stored or editable tag list: drop empties and duplicates (case-insensitive),
+     * keep the first spelling and order, and stop at the per-prompt cap.
+     * @param {unknown} value - Raw tag list.
+     * @returns {string[]} Distinct tags.
+     */
+    function normalizeTags(value) {
+      if (!Array.isArray(value)) return []
+      const tags = []
+      const seen = new Set()
+      for (const item of value) {
+        const tag = normalizeTag(item)
+        if (tag === '') continue
+        const key = tag.toLowerCase()
+        if (seen.has(key)) continue
+        seen.add(key)
+        tags.push(tag)
+        if (tags.length === MAX_TAGS) break
+      }
+      return tags
+    }
+
+    /**
+     * @param {string[]} tags - Current tags.
+     * @param {string} tag - Normalized tag to append.
+     * @returns {string[] | null} The next list, or null when the tag is empty, duplicate, or the cap is reached.
+     */
+    function appendTag(tags, tag) {
+      if (tag === '' || tags.length >= MAX_TAGS) return null
+      if (tags.some((item) => item.toLowerCase() === tag.toLowerCase())) return null
+      return [...tags, tag]
+    }
+
     /**
      * Adopt one stored document, dropping entries this version cannot render.
      * @param {unknown} raw - Parsed JSON from storage.
@@ -196,6 +265,7 @@ window.__ModuleLoader__.load({
           id,
           title,
           content,
+          tags: normalizeTags(item.tags),
           createdAt: typeof item.createdAt === 'number' ? item.createdAt : Date.now(),
           updatedAt: typeof item.updatedAt === 'number' ? item.updatedAt : Date.now(),
         })
@@ -214,6 +284,7 @@ window.__ModuleLoader__.load({
           id: makeId(),
           title: entry.title,
           content: entry.content,
+          tags: normalizeTags(entry.tags),
           createdAt: now - index,
           updatedAt: now - index,
         })),
@@ -619,18 +690,32 @@ window.__ModuleLoader__.load({
 
       const rows = doc.prompts.length === 0
         ? [h('div', { className: 'dshpl-menu-empty', key: 'empty' }, t('menuEmpty'))]
-        : doc.prompts.map((prompt, index) => h(
-          'button',
-          {
-            key: prompt.id,
-            ref: index === 0 ? firstRef : undefined,
-            type: 'button',
-            role: 'menuitem',
-            className: 'dshpl-menu-item',
-            onClick: () => pick(prompt),
-          },
-          h('span', { className: 'dshpl-menu-title' }, prompt.title),
-        ))
+        : doc.prompts.map((prompt, index) => {
+          const tags = Array.isArray(prompt.tags) ? prompt.tags : []
+          return h(
+            'button',
+            {
+              key: prompt.id,
+              ref: index === 0 ? firstRef : undefined,
+              type: 'button',
+              role: 'menuitem',
+              className: 'dshpl-menu-item',
+              onClick: () => pick(prompt),
+            },
+            h(
+              'span',
+              { className: 'dshpl-menu-main' },
+              h('span', { className: 'dshpl-menu-title' }, prompt.title),
+              tags.length === 0
+                ? null
+                : h(
+                  'span',
+                  { className: 'dshpl-menu-tags' },
+                  tags.slice(0, 3).join(' · ') + (tags.length > 3 ? ' …' : ''),
+                ),
+            ),
+          )
+        })
 
       return h(
         'div',
@@ -814,6 +899,54 @@ window.__ModuleLoader__.load({
   gap: 8px;
   padding: 10px 12px 8px;
 }
+.dshpl-tags {
+  flex: none;
+  display: flex;
+  gap: 4px;
+  padding: 0 12px 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+.dshpl-tags::-webkit-scrollbar { display: none; }
+.dshpl-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 170px;
+  height: 18px;
+  box-sizing: border-box;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: var(--dsw-radius-sm, 4px);
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  font-size: 10.5px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+.dshpl-tag-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dshpl-tag-count { flex: none; opacity: 0.65; font-size: 10px; }
+.dshpl-tag-filter {
+  flex: none;
+  height: 20px;
+  cursor: pointer;
+  border-color: var(--dsw-alias-border-l1);
+  background: var(--dsw-alias-bg-layer-1);
+}
+.dshpl-tag-filter:hover { background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); }
+.dshpl-tag-filter[data-active="true"] {
+  border-color: color-mix(in srgb, var(--dsw-alias-brand-primary) 35%, transparent);
+  background: color-mix(in srgb, var(--dsw-alias-brand-primary) 12%, transparent);
+  color: var(--dsw-alias-brand-primary);
+}
+.dshpl-tag-filter:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
 .dshpl-search {
   flex: 1;
   min-width: 0;
@@ -886,6 +1019,16 @@ window.__ModuleLoader__.load({
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.dshpl-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.dshpl-card-tags .dshpl-tag {
+  height: 17px;
+  font-size: 10px;
+  line-height: 15px;
+}
 .dshpl-card-body {
   color: var(--dsw-alias-label-secondary);
   font-size: 12px;
@@ -942,6 +1085,62 @@ window.__ModuleLoader__.load({
 .dshpl-editor-title:focus-visible,
 .dshpl-editor-content:focus-visible { border-color: var(--dsw-alias-brand-primary); }
 .dshpl-editor-content { min-height: 92px; }
+.dshpl-editor-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-height: 32px;
+  box-sizing: border-box;
+  padding: 4px 6px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: var(--dsw-radius-sm, 6px);
+  background: var(--dsw-alias-bg-base);
+}
+.dshpl-editor-tags:focus-within { border-color: var(--dsw-alias-brand-primary); }
+.dshpl-editor-tag { height: 20px; font-size: 11px; line-height: 18px; }
+.dshpl-tag-remove {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-right: -2px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+.dshpl-tag-remove:hover {
+  background: var(--dsw-alias-bg-layer-3);
+  color: var(--dsw-alias-label-primary);
+}
+.dshpl-tag-remove:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
+.dshpl-tag-input {
+  flex: 1;
+  min-width: 90px;
+  height: 24px;
+  padding: 0 2px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+}
+.dshpl-tag-input::placeholder { color: var(--dsw-alias-label-secondary); }
+.dshpl-tag-input:disabled { cursor: default; }
+.dshpl-editor-hint {
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+  line-height: 16px;
+}
 .dshpl-editor-label {
   color: var(--dsw-alias-label-secondary);
   font-size: 12px;
@@ -1004,6 +1203,12 @@ window.__ModuleLoader__.load({
   border-top: 1px solid var(--dsw-alias-border-l1);
   color: var(--dsw-alias-label-secondary);
   font-size: 12px;
+}
+.dshpl-foot-hint { min-width: 0; }
+.dshpl-foot-count {
+  flex: none;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary));
 }
 .dshpl-notice {
   flex: none;
@@ -1089,9 +1294,23 @@ window.__ModuleLoader__.load({
   background: var(--dsw-alias-interactive-bg-hover, var(--dsw-alias-bg-layer-2));
   outline: none;
 }
-.dshpl-menu-title {
+.dshpl-menu-main {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.dshpl-menu-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dshpl-menu-tags {
+  color: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary));
+  font-size: 11px;
+  line-height: 15px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1142,6 +1361,7 @@ window.__ModuleLoader__.load({
   min-height: 0;
 }
 .dshpl-root-settings .dshpl-head { padding: 0 0 4px; }
+.dshpl-root-settings .dshpl-tags { padding: 0 0 8px; }
 .dshpl-root-settings .dshpl-list {
   flex: none;
   overflow: visible;
@@ -1197,6 +1417,9 @@ window.__ModuleLoader__.load({
      */
     function PromptCard({ prompt, t, onInsert, onEdit, onCopy, onRemove }) {
       const preview = prompt.content.trim()
+      const tags = Array.isArray(prompt.tags) ? prompt.tags : []
+      const shownTags = tags.slice(0, 3)
+      const hiddenTags = tags.length - shownTags.length
       return h(
         'div',
         { className: 'dshpl-card' },
@@ -1209,6 +1432,20 @@ window.__ModuleLoader__.load({
             onClick: () => onInsert(prompt),
           },
           h('span', { className: 'dshpl-card-title' }, prompt.title),
+          tags.length === 0
+            ? null
+            : h(
+              'span',
+              { className: 'dshpl-card-tags' },
+              shownTags.map((tag) => h(
+                'span',
+                { className: 'dshpl-tag', key: tag, title: tag },
+                h('span', { className: 'dshpl-tag-label' }, tag),
+              )),
+              hiddenTags > 0
+                ? h('span', { className: 'dshpl-tag dshpl-tag-more', title: tags.join(' · ') }, '+' + hiddenTags)
+                : null,
+            ),
           h('span', { className: 'dshpl-card-body' }, preview),
         ),
         h(
@@ -1245,11 +1482,76 @@ window.__ModuleLoader__.load({
      * @param {{ draft: object, t: Function, onChange: Function, onSave: Function, onCancel: Function }} props
      */
     function PromptEditor({ draft, t, onChange, onSave, onCancel }) {
+      const doc = useDoc()
       const titleRef = React.useRef(null)
+      const [pendingTag, setPendingTag] = React.useState('')
+      const suggestionsId = React.useMemo(() => 'dshpl-tag-suggestions-' + makeId(), [])
+      const tags = Array.isArray(draft.tags) ? draft.tags : []
+
       React.useEffect(() => {
         if (titleRef.current !== null) titleRef.current.focus()
       }, [])
-      const save = () => onSave(draft)
+
+      // Every tag already used elsewhere, minus the ones this prompt carries. The datalist is
+      // only a suggestion: typing a new tag always works.
+      const suggestions = React.useMemo(() => {
+        const seen = new Set(tags.map((tag) => tag.toLowerCase()))
+        const list = []
+        for (const prompt of doc.prompts) {
+          for (const tag of prompt.tags ?? []) {
+            const key = tag.toLowerCase()
+            if (seen.has(key)) continue
+            seen.add(key)
+            list.push(tag)
+            if (list.length === 40) return list
+          }
+        }
+        return list
+      }, [doc, tags])
+
+      const save = () => {
+        const tag = normalizeTag(pendingTag)
+        const nextTags = tag === '' ? null : appendTag(tags, tag)
+        onSave(nextTags === null ? { ...draft, tags } : { ...draft, tags: nextTags })
+      }
+
+      const commitTag = () => {
+        const tag = normalizeTag(pendingTag)
+        if (tag !== '') {
+          const next = appendTag(tags, tag)
+          if (next !== null) onChange({ ...draft, tags: next })
+        }
+        setPendingTag('')
+      }
+
+      const removeTag = (tag) => {
+        onChange({ ...draft, tags: tags.filter((item) => item !== tag) })
+      }
+
+      const onTagKeyDown = (event) => {
+        if (event.isComposing || event.keyCode === 229) return
+        if (event.key === 'Enter') {
+          event.preventDefault()
+          if (event.metaKey || event.ctrlKey) save()
+          else commitTag()
+          return
+        }
+        if (event.key === ',' || event.key === '，') {
+          event.preventDefault()
+          commitTag()
+          return
+        }
+        if (event.key === 'Backspace' && pendingTag === '' && tags.length > 0) {
+          event.preventDefault()
+          removeTag(tags[tags.length - 1])
+          return
+        }
+        if (event.key === 'Escape') {
+          event.preventDefault()
+          onCancel()
+        }
+      }
+
       return h(
         'div',
         { className: 'dshpl-editor' },
@@ -1288,6 +1590,43 @@ window.__ModuleLoader__.load({
             }
           },
         }),
+        h('span', { className: 'dshpl-editor-label' }, t('tagsLabel')),
+        h(
+          'div',
+          { className: 'dshpl-editor-tags' },
+          tags.map((tag) => h(
+            'span',
+            { className: 'dshpl-tag dshpl-editor-tag', key: tag },
+            h('span', { className: 'dshpl-tag-label' }, tag),
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'dshpl-tag-remove',
+                title: t('removeTag'),
+                'aria-label': t('removeTag') + ': ' + tag,
+                onClick: () => removeTag(tag),
+              },
+              '\u00d7',
+            ),
+          )),
+          h('input', {
+            className: 'dshpl-tag-input',
+            type: 'text',
+            value: pendingTag,
+            placeholder: tags.length >= MAX_TAGS ? t('tagsFull') : t('tagPlaceholder'),
+            maxLength: MAX_TAG_LENGTH,
+            list: suggestions.length === 0 ? undefined : suggestionsId,
+            disabled: tags.length >= MAX_TAGS,
+            'aria-label': t('tagPlaceholder'),
+            onChange: (event) => setPendingTag(event.target.value),
+            onKeyDown: onTagKeyDown,
+          }),
+          suggestions.length === 0
+            ? null
+            : h('datalist', { id: suggestionsId }, suggestions.map((tag) => h('option', { key: tag, value: tag }))),
+        ),
+        h('span', { className: 'dshpl-editor-hint' }, t('tagsHint')),
         h(
           'div',
           { className: 'dshpl-editor-actions' },
@@ -1305,6 +1644,7 @@ window.__ModuleLoader__.load({
       const settings = variant === 'settings'
       const doc = useDoc()
       const [query, setQuery] = React.useState('')
+      const [tagFilter, setTagFilter] = React.useState(null)
       const [draft, setDraft] = React.useState(null)
       const [confirmId, setConfirmId] = React.useState(null)
       const [notice, setNotice] = React.useState(null)
@@ -1325,10 +1665,29 @@ window.__ModuleLoader__.load({
 
       const prompts = doc.prompts
       const needle = query.trim().toLowerCase()
-      const visible = needle === ''
-        ? prompts
-        : prompts.filter((prompt) =>
-          prompt.title.toLowerCase().includes(needle) || prompt.content.toLowerCase().includes(needle))
+
+      // Tag facets: one entry per tag spelling, counted once per prompt, most-used first.
+      const tagIndex = new Map()
+      for (const prompt of prompts) {
+        for (const tag of prompt.tags ?? []) {
+          const key = tag.toLowerCase()
+          const entry = tagIndex.get(key)
+          if (entry === undefined) tagIndex.set(key, { key, tag, count: 1 })
+          else entry.count += 1
+        }
+      }
+      const tags = [...tagIndex.values()].sort((left, right) =>
+        right.count - left.count || left.tag.localeCompare(right.tag))
+      const activeTag = tagFilter !== null && tagIndex.has(tagFilter) ? tagFilter : null
+
+      const visible = prompts.filter((prompt) => {
+        if (activeTag !== null && !(prompt.tags ?? []).some((tag) => tag.toLowerCase() === activeTag)) return false
+        if (needle === '') return true
+        if (prompt.title.toLowerCase().includes(needle)) return true
+        if (prompt.content.toLowerCase().includes(needle)) return true
+        return (prompt.tags ?? []).some((tag) => tag.toLowerCase().includes(needle))
+      })
+      const filtering = needle !== '' || activeTag !== null
 
       const insert = (prompt) => {
         setConfirmId(null)
@@ -1349,12 +1708,20 @@ window.__ModuleLoader__.load({
 
       const startCreate = () => {
         setConfirmId(null)
-        setDraft({ id: null, title: '', content: '' })
+        // A fresh prompt is inserted at the top; clear the filters so it cannot land out of view.
+        setQuery('')
+        setTagFilter(null)
+        setDraft({ id: null, title: '', content: '', tags: [] })
       }
 
       const startEdit = (prompt) => {
         setConfirmId(null)
-        setDraft({ id: prompt.id, title: prompt.title, content: prompt.content })
+        setDraft({
+          id: prompt.id,
+          title: prompt.title,
+          content: prompt.content,
+          tags: Array.isArray(prompt.tags) ? [...prompt.tags] : [],
+        })
       }
 
       const save = (candidate) => {
@@ -1364,17 +1731,18 @@ window.__ModuleLoader__.load({
           return
         }
         const title = candidate.title.trim() === '' ? titleFromContent(content) || t('newPromptTitle') : candidate.title.trim()
+        const tags = normalizeTags(candidate.tags)
         const now = Date.now()
         if (candidate.id === null) {
           editDoc((current) => ({
             version: 1,
-            prompts: [{ id: makeId(), title, content, createdAt: now, updatedAt: now }, ...current.prompts],
+            prompts: [{ id: makeId(), title, content, tags, createdAt: now, updatedAt: now }, ...current.prompts],
           }))
         } else {
           editDoc((current) => ({
             version: 1,
             prompts: current.prompts.map((prompt) =>
-              prompt.id === candidate.id ? { ...prompt, title, content, updatedAt: now } : prompt),
+              prompt.id === candidate.id ? { ...prompt, title, content, tags, updatedAt: now } : prompt),
           }))
         }
         setDraft(null)
@@ -1424,7 +1792,7 @@ window.__ModuleLoader__.load({
         ))
       }
       if (visible.length === 0) {
-        items.push(h('p', { className: 'dshpl-empty', key: 'empty' }, needle === '' ? t('empty') : t('emptySearch')))
+        items.push(h('p', { className: 'dshpl-empty', key: 'empty' }, filtering ? t('emptySearch') : t('empty')))
       }
       for (const prompt of visible) {
         items.push(h(PromptCard, {
@@ -1459,6 +1827,37 @@ window.__ModuleLoader__.load({
             h('span', {}, t('create')),
           ),
         ),
+        tags.length === 0
+          ? null
+          : h(
+            'div',
+            { className: 'dshpl-tags', key: 'tags', role: 'group', 'aria-label': t('filterByTag') },
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'dshpl-tag dshpl-tag-filter',
+                'data-active': activeTag === null ? 'true' : 'false',
+                'aria-pressed': activeTag === null ? 'true' : 'false',
+                onClick: () => setTagFilter(null),
+              },
+              h('span', { className: 'dshpl-tag-label' }, t('filterAll')),
+            ),
+            tags.map(({ key, tag, count }) => h(
+              'button',
+              {
+                key,
+                type: 'button',
+                className: 'dshpl-tag dshpl-tag-filter',
+                title: tag,
+                'data-active': activeTag === key ? 'true' : 'false',
+                'aria-pressed': activeTag === key ? 'true' : 'false',
+                onClick: () => setTagFilter(activeTag === key ? null : key),
+              },
+              h('span', { className: 'dshpl-tag-label' }, tag),
+              h('span', { className: 'dshpl-tag-count' }, String(count)),
+            )),
+          ),
         h('div', { className: 'dshpl-list', key: 'list' }, items),
         notice === null
           ? null
@@ -1466,8 +1865,14 @@ window.__ModuleLoader__.load({
         h(
           'div',
           { className: 'dshpl-foot', key: 'foot' },
-          h('span', {}, t(settings ? 'hintSettings' : 'hint')),
-          h('span', {}, t('countPrefix') + prompts.length + t('countSuffix')),
+          h('span', { className: 'dshpl-foot-hint' }, t(settings ? 'hintSettings' : 'hint')),
+          h(
+            'span',
+            { className: 'dshpl-foot-count' },
+            filtering
+              ? visible.length + ' / ' + prompts.length + t('countSuffix')
+              : t('countPrefix') + prompts.length + t('countSuffix'),
+          ),
         ),
       )
     }
