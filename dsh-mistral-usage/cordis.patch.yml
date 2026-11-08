@@ -1,0 +1,34 @@
+# Mistral usage — the Mistral allowance in the sidebar, and this Harness's
+# Mistral spend, plus a mirror into the cost meter's quota card.
+#
+# The Host half resolves MISTRAL_API_KEY, reads the plan and both monthly
+# budgets from Mistral's public billing API, folds every Mistral request this
+# Harness routed into a per-day ledger, and serves both to the Client half.
+# The Client half renders the sidebar card and the Settings page.
+#
+# Optional overrides (a patch replaces the whole row config, so repeat every
+# key you keep):
+#   apiKeyEnv: MISTRAL_API_KEY      # credential reference holding the key
+#   baseURL: https://api.mistral.ai # Mistral API root
+#   currency: EUR                   # currency used when the API names none
+#   barMax: 125                     # fallback 100% when no API budget is reported
+#                                   # (the Vibe allowance is never shown: Vibe
+#                                   # spends it in its own harness, not this key)
+#   requestTimeoutMs: 15000         # per-request timeout
+#   costMeter: true                 # mirror into dsh-cost-meter's "Mistral"
+#                                   # quota card when that plugin is installed
+#   prices:                         # override the per-model price per million
+#     deepseek-v4-1-flash-1017:     # tokens (input/output/cacheRead/cacheWrite)
+#       input: 0.3                  # used by the cost estimate
+#       output: 1.2
+#       cacheRead: 0.007
+- insert:
+    - id: mistral-usage
+      name: '@local/dsh-mistral-usage'
+      config:
+        apiKeyEnv: MISTRAL_API_KEY
+        baseURL: https://api.mistral.ai
+        currency: EUR
+        barMax: 125
+        requestTimeoutMs: 15000
+        costMeter: true

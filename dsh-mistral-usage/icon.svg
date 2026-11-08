@@ -1,0 +1,14 @@
+<svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Mistral usage">
+  <defs>
+    <linearGradient id="mu-ramp" x1="7" y1="18" x2="29" y2="18" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFD800"/>
+      <stop offset="0.45" stop-color="#FFAF00"/>
+      <stop offset="0.75" stop-color="#FF8205"/>
+      <stop offset="1" stop-color="#FA500F"/>
+    </linearGradient>
+  </defs>
+  <path d="M6.5 26.5a11.5 11.5 0 1 1 23 0" stroke="#E3E6EC" stroke-width="3.4" stroke-linecap="round"/>
+  <path d="M6.5 26.5a11.5 11.5 0 0 1 17.2-10" stroke="url(#mu-ramp)" stroke-width="3.4" stroke-linecap="round"/>
+  <path d="M18 26.5 24.2 18.6" stroke="#3D434D" stroke-width="2.6" stroke-linecap="round"/>
+  <circle cx="18" cy="26.5" r="2.6" fill="#3D434D"/>
+</svg>

@@ -12,6 +12,7 @@ plugin.
 | `dsh-local-build-plugins` | `@local/dsh-local-build-plugins` | Groups locally built plugins into their own section in Plugin Manager. |
 | `dsh-local-build-plugins-tab` | `@local/dsh-local-build-plugins-tab` | Adds the "Local build" tab to Plugin Manager. |
 | `dsh-turn-notify` | `@local/dsh-turn-notify` | Notifies when a turn finishes. |
+| `dsh-mistral-usage` | `@local/dsh-mistral-usage` | Shows the Mistral API key's plan and monthly allowance (read from Mistral's billing API) on a sidebar card, lists this Harness's Mistral tokens and estimated cost in Settings, and mirrors the allowance into the cost meter's quota card as **Mistral**. |
 
 ## Shape of one bundle
 
