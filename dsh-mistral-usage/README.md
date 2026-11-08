@@ -25,7 +25,8 @@ Settings › Cost › Quotas.
 | `GET /v1/billing/budget` | `vibe_budget` and `api_budget`, each with `initial_budget`, `usage_percentage`, `currency`, `reset_at` |
 
 Both answer to an **ordinary API key** — no Admin API and no Enterprise plan
-needed. (The Admin API at `/v1/admin/usage` is a different, Enterprise-only
+needed. Only `api_budget` is used: `vibe_budget` measures what Vibe spent inside
+its own harness, not what this API key spent. (The Admin API at `/v1/admin/usage` is a different, Enterprise-only
 surface; a standard key gets `401` there.) A key without the
 `see_org_inference_usage` permission gets `403` on the budget read; the plan
 still comes through and the card falls back to this Harness's own spend.
@@ -35,8 +36,9 @@ still comes through and the card falls back to this Harness's own spend.
 The card lives in the `sidebar.footer.action` seat, above the Settings button:
 
 - the plugin name and the plan (`EDU`, …);
-- a Mistral-orange progress bar for the allowance the row's `barBudget` names
-  (`vibe` by default, `api` to track the API budget);
+- a Mistral-orange progress bar for the **API budget** — the money this key
+  actually spends. The Vibe allowance is deliberately not shown: Vibe consumes
+  it inside its own harness, so it is not this key's spend;
 - the amount used against the limit, and when it resets;
 - today's tokens, and today's call count with the estimated cost.
 
@@ -46,8 +48,8 @@ In the collapsed 56px rail the same figure becomes a ring with the percentage.
 
 Settings › **Mistral usage**:
 
-- **Account allowance** — both budgets with used / limit, percentage and reset
-  time, plus the plan and whether pay-as-you-go is on.
+- **Account allowance** — the API budget with used / limit, percentage and
+  reset time, plus the plan and whether pay-as-you-go is on.
 - **This Harness** — today and all sessions: tokens, calls and estimated cost,
   then a per-model table for today with the price source of each row
   (`your config`, `pi-ai catalog`, `Mistral price list`, `default estimate`).
@@ -92,8 +94,8 @@ authoritative.
 `CODING_PLAN_PROVIDERS` list. This bundle publishes into that list at load
 time, adding a `mistral` entry whose quota query reads exactly the billing
 endpoints above and returns the same normalized windows
-(`monthly` = the Vibe allowance, `api` = the API budget), plus a text
-`balance` row with the remaining amount.
+(`monthly` = the API budget), plus a text `balance` row with the remaining
+amount. The Vibe allowance is not mirrored either, for the same reason.
 
 ```js
 // installed dsh-cost-meter, lib/coding-plans.js
@@ -122,8 +124,7 @@ Edit the row in the profile's `cordis.patch.yml` (a patch replaces the whole
     apiKeyEnv: MISTRAL_API_KEY      # credential reference holding the key
     baseURL: https://api.mistral.ai # Mistral API root
     currency: EUR                   # currency used when the API names none
-    barBudget: vibe                 # which reported budget the bar tracks
-    barMax: 125                     # fallback 100% when no budget is reported
+    barMax: 125                     # fallback 100% when no API budget is reported
     requestTimeoutMs: 15000         # per-request timeout
     costMeter: true                 # mirror into dsh-cost-meter
     prices:                         # optional per-model overrides

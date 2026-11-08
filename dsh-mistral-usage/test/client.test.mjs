@@ -190,7 +190,7 @@ test('both surfaces render the figures the Host reports', async (t) => {
         },
         total: { calls: 150, input: 3059833, output: 65397, cacheRead: 23911552, cacheWrite: 0, reasoning: 0, cost: 1.16 },
       },
-      bar: { value: 0, max: 150, percent: 0, source: 'account', budget: 'vibe', currency: 'USD', resetAt: '2026-12-01T00:00:00Z' },
+      bar: { value: 0.81, max: 15, percent: 5.4, source: 'account', budget: 'api', currency: 'USD', resetAt: '2026-12-01T00:00:00Z' },
       costMeter: { enabled: true, connected: false, windows: [] },
     }),
   })
@@ -203,14 +203,17 @@ test('both surfaces render the figures the Host reports', async (t) => {
     const section = entries.find((entry) => entry.options.name === 'settings.section')
     const wide = flatten(footer.component({ wide: true }))
     assert.match(wide, /EDU/, 'the plan is shown')
-    assert.match(wide, /150\.00/, 'the allowance limit is shown')
+    assert.match(wide, /15\.00/, 'the API budget limit is shown')
+    assert.match(wide, /0\.81/, 'the API budget spend is shown')
+    assert.doesNotMatch(wide, /150\.00/, 'the Vibe allowance is not shown')
     assert.match(wide, /27\.0M/, "today's tokens are shown")
-    assert.match(wide, /150/, "today's call count is shown")
     const rail = flatten(footer.component({ wide: false }))
-    assert.match(rail, /0%/, 'the rail tile carries the percentage')
+    assert.match(rail, /5%/, 'the rail tile carries the API percentage')
     const page = flatten(section.component({}))
     assert.match(page, /deepseek-v4-1-flash-1017/, 'the per-model table lists the model')
     assert.match(page, /API Key/, 'the key card renders')
+    assert.match(page, /\$14\.19/, 'the settings page shows what is left of the API budget')
+    assert.doesNotMatch(page, /150\.00/, 'the settings page omits the Vibe allowance')
     assert.match(page, /EDU/, 'the settings page repeats the plan')
   } finally {
     globalThis.fetch = realFetch

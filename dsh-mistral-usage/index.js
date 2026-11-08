@@ -413,7 +413,6 @@ class MistralUsage {
    * @param {string} options.baseURL - Mistral API root.
    * @param {string} options.currency - currency of the billing figures.
    * @param {number} options.barMax - spend at which the sidebar bar reads 100% when no budget is reported.
-   * @param {string} options.barBudget - which reported budget the bar tracks (`vibe` or `api`).
    * @param {number} options.requestTimeoutMs - per-request timeout.
    * @param {boolean} options.costMeter - whether to publish into `dsh-cost-meter`.
    * @param {object} options.logger - Cordis logger.
@@ -424,7 +423,6 @@ class MistralUsage {
     this.baseURL = options.baseURL.replace(/\/+$/, "");
     this.currency = options.currency;
     this.barMax = options.barMax;
-    this.barBudget = options.barBudget === "api" ? "api" : "vibe";
     this.requestTimeoutMs = options.requestTimeoutMs;
     this.costMeterEnabled = options.costMeter !== false;
     this.logger = options.logger;
@@ -809,10 +807,12 @@ class MistralUsage {
       consumption = { status: "ok", ref: this.apiKeyEnv, ...this.lastConsumption };
     }
     const ledger = this.ledgerView(pricesFor);
-    // The bar tracks the real monthly budget the billing API reports (the Vibe
-    // allowance by default); without one it falls back to this Harness's own
+    // The bar tracks the API budget the billing API reports. The Vibe allowance
+    // is deliberately ignored: it is consumed by Vibe inside its own harness,
+    // not by this API key, so showing it here would read as spend that never
+    // happened. Without an API budget the bar falls back to this Harness's own
     // Mistral spend against the configured `barMax`.
-    const budget = consumption.status === "ok" ? (consumption[this.barBudget] ?? consumption.vibe ?? consumption.api) : undefined;
+    const budget = consumption.status === "ok" ? consumption.api : undefined;
     const bar =
       budget !== undefined
         ? {
@@ -829,7 +829,28 @@ class MistralUsage {
     const costMeter = await this.costMeterPlan(options?.refresh === true);
     return {
       credential,
-      consumption,
+      // Only the API budget is exposed: the Vibe allowance belongs to Vibe's own
+      // harness, so sending it would invite a surface to show it as this key's.
+      // The flat fields are re-led by the API budget for the same reason.
+      consumption:
+        consumption.status === "ok"
+          ? {
+              status: consumption.status,
+              ref: consumption.ref,
+              source: consumption.source,
+              plan: consumption.plan,
+              enterprise: consumption.enterprise,
+              payg: consumption.payg,
+              currency: consumption.currency,
+              api: consumption.api,
+              spent: consumption.api?.spent,
+              limit: consumption.api?.limit,
+              remaining: consumption.api !== undefined ? Math.max(0, consumption.api.limit - consumption.api.spent) : undefined,
+              percent: consumption.api?.percent,
+              resetAt: consumption.api?.resetAt,
+              fetchedAt: consumption.fetchedAt,
+            }
+          : consumption,
       ledger,
       bar,
       costMeter: {
@@ -893,11 +914,10 @@ export function apply(ctx, config = {}) {
   const baseURL = typeof config.baseURL === "string" && config.baseURL.length > 0 ? config.baseURL : DEFAULT_BASE_URL;
   const currency = typeof config.currency === "string" && config.currency.length > 0 ? config.currency.toUpperCase() : "EUR";
   const barMax = Number.isFinite(config.barMax) && config.barMax > 0 ? config.barMax : 125;
-  const barBudget = config.barBudget === "api" ? "api" : "vibe";
   const requestTimeoutMs = Number.isFinite(config.requestTimeoutMs) && config.requestTimeoutMs > 0 ? config.requestTimeoutMs : 15_000;
   const costMeter = config.costMeter !== false;
 
-  const usage = new MistralUsage({ ctx, apiKeyEnv, baseURL, currency, barMax, barBudget, requestTimeoutMs, costMeter, logger });
+  const usage = new MistralUsage({ ctx, apiKeyEnv, baseURL, currency, barMax, requestTimeoutMs, costMeter, logger });
 
   const configuredPrices = config.prices !== null && typeof config.prices === "object" ? config.prices : {};
 
@@ -1127,10 +1147,10 @@ export function apply(ctx, config = {}) {
             const lines = [];
             if (consumption.status === "ok") {
               lines.push(`Mistral plan: ${consumption.plan ?? "unknown"}`);
-              for (const budget of [consumption.vibe, consumption.api]) {
-                if (budget === undefined) continue;
+              const budget = consumption.api;
+              if (budget !== undefined) {
                 lines.push(
-                  `${budget.kind === "vibe" ? "Vibe allowance" : "API budget"}: ${money(budget.spent, budget.currency ?? currency)} of ${money(budget.limit, budget.currency ?? currency)} used (${budget.percent.toFixed(1)}%)${budget.resetAt !== undefined ? `, resets ${budget.resetAt}` : ""}`,
+                  `API budget: ${money(budget.spent, budget.currency ?? currency)} of ${money(budget.limit, budget.currency ?? currency)} used (${budget.percent.toFixed(1)}%)${budget.resetAt !== undefined ? `, resets ${budget.resetAt}` : ""}`,
                 );
               }
             } else if (consumption.status === "missing-key") {
@@ -1181,11 +1201,12 @@ function budgetWindow(budget) {
 }
 
 /**
- * Ask Mistral for the allowance in the shape `dsh-cost-meter` renders.
+ * Ask Mistral for the API budget in the shape `dsh-cost-meter` renders.
  *
- * `monthly` is the Vibe allowance the sidebar bar tracks, `api` the separate
- * API budget, and `balance` a text row with what is left of the allowance —
- * the same window names the cost meter's own cards use.
+ * `monthly` is the API budget — the money this key actually spends — and
+ * `balance` a text row with what is left of it. The Vibe allowance is left out
+ * on purpose: it is consumed by Vibe inside its own harness, not by this API
+ * key, so showing it beside the API spend would read as money that never moved.
  * @param {string} key - the Mistral API key the cost meter resolved.
  * @param {string} baseURL - Mistral API root.
  * @param {number} timeoutMs - per-request timeout.
@@ -1212,15 +1233,12 @@ async function queryMistralQuota(key, baseURL, timeoutMs) {
     throw new Error("Mistral billing API returned no JSON");
   }
   const record = payload !== null && typeof payload === "object" ? /** @type {Record<string, unknown>} */ (payload) : {};
-  const vibe = normalizeBudget(record.vibe_budget, "vibe");
   const api = normalizeBudget(record.api_budget, "api");
-  if (vibe === undefined && api === undefined) throw new Error("Mistral reported no allowance for this key");
-  const windows = {};
-  if (vibe !== undefined) {
-    windows.monthly = budgetWindow(vibe);
-    windows.balance = { resetsAt: "", text: money(Math.max(0, vibe.limit - vibe.spent), vibe.currency ?? "EUR") };
-  }
-  if (api !== undefined) windows.api = budgetWindow(api);
+  if (api === undefined) throw new Error("Mistral reported no API budget for this key");
+  const windows = {
+    monthly: budgetWindow(api),
+    balance: { resetsAt: "", text: money(Math.max(0, api.limit - api.spent), api.currency ?? "EUR") },
+  };
   return { windows, endpoint: url };
 }
 

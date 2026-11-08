@@ -120,14 +120,41 @@ test('the quota answer carries only the window fields the cost meter renders', a
   globalThis.fetch = async () => new Response(JSON.stringify(budgetBody()), { status: 200 })
   try {
     const answer = await __test.queryMistralQuota('sk-test', 'https://api.mistral.ai', 1000)
-    assert.deepEqual(Object.keys(answer.windows).sort(), ['api', 'balance', 'monthly'])
+    // The API budget is the only allowance this key spends; `monthly` carries it.
+    assert.deepEqual(Object.keys(answer.windows).sort(), ['balance', 'monthly'])
     for (const window of Object.values(answer.windows)) {
       for (const key of Object.keys(window)) assert.ok(['percent', 'resetsAt', 'text'].includes(key), `unexpected field ${key}`)
     }
-    assert.equal(answer.windows.monthly.percent, 12.5)
+    assert.equal(answer.windows.monthly.percent, 40)
     assert.equal(answer.windows.monthly.resetsAt, '2026-12-01T00:00:00Z')
-    assert.equal(answer.windows.api.percent, 40)
-    assert.match(answer.windows.balance.text, /111/)
+    assert.match(answer.windows.balance.text, /30/)
+  } finally {
+    globalThis.fetch = realFetch
+  }
+})
+
+test('the Vibe allowance is never reported as this key\'s spend', async () => {
+  const realFetch = globalThis.fetch
+  globalThis.fetch = async () => new Response(JSON.stringify(budgetBody()), { status: 200 })
+  try {
+    const answer = await __test.queryMistralQuota('sk-test', 'https://api.mistral.ai', 1000)
+    // budgetBody's Vibe budget is 12.5% of 127.5; the API budget is 40% of 50.
+    assert.notEqual(answer.windows.monthly.percent, 12.5)
+    assert.equal(answer.windows.monthly.percent, 40)
+    assert.match(answer.windows.balance.text, /30/)
+    assert.doesNotMatch(answer.windows.balance.text, /111/)
+  } finally {
+    globalThis.fetch = realFetch
+  }
+})
+
+test('a key with no API budget is an error even when a Vibe allowance exists', async () => {
+  const realFetch = globalThis.fetch
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    vibe_budget: { initial_budget: 127.5, usage_percentage: 12.5, currency: 'EUR' },
+  }), { status: 200 })
+  try {
+    await assert.rejects(() => __test.queryMistralQuota('sk', 'https://api.mistral.ai', 1000), /no API budget/)
   } finally {
     globalThis.fetch = realFetch
   }
@@ -151,7 +178,7 @@ test('a body without an allowance is an error, not an empty card', async () => {
   const realFetch = globalThis.fetch
   globalThis.fetch = async () => new Response(JSON.stringify({ hello: 'world' }), { status: 200 })
   try {
-    await assert.rejects(() => __test.queryMistralQuota('sk', 'https://api.mistral.ai', 1000), /no allowance/)
+    await assert.rejects(() => __test.queryMistralQuota('sk', 'https://api.mistral.ai', 1000), /no API budget/)
   } finally {
     globalThis.fetch = realFetch
   }
@@ -201,6 +228,36 @@ test('the cost-meter provider is installed and removed without touching disk', a
     if (previousProfile === undefined) delete process.env.DSH_PROFILE
     else process.env.DSH_PROFILE = previousProfile
     fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('the view never hands the Vibe allowance to a surface', async () => {
+  const realFetch = globalThis.fetch
+  globalThis.fetch = async () => new Response(JSON.stringify(budgetBody()), { status: 200 })
+  try {
+    const view = new __test.MistralUsage({
+      // A credential seam that hands back the key, as the Host's own does.
+      ctx: { get: (name) => (name === 'credentials' ? { resolve: async () => ({ value: 'sk-test', source: 'file' }) } : undefined) },
+      apiKeyEnv: 'MISTRAL_API_KEY',
+      baseURL: 'https://api.mistral.ai',
+      currency: 'EUR',
+      barMax: 125,
+      requestTimeoutMs: 1000,
+      costMeter: false,
+      logger: { warn() {}, info() {}, debug() {} },
+    })
+    view.seeded = true
+    const pricesFor = () => ({ prices: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, source: 'test' })
+    const answer = await view.view({ refresh: true }, pricesFor)
+    assert.equal(answer.bar.budget, 'api')
+    assert.equal(answer.bar.max, 50)
+    assert.equal(answer.consumption.api.percent, 40)
+    assert.equal(answer.consumption.vibe, undefined)
+    // The flat fields now describe the API budget, not the Vibe allowance.
+    assert.equal(answer.consumption.limit, 50)
+    assert.equal(answer.consumption.percent, 40)
+  } finally {
+    globalThis.fetch = realFetch
   }
 })
 

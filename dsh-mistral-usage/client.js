@@ -45,7 +45,6 @@ window.__ModuleLoader__.load({
       plan: 'Plan',
       planUnknown: 'No plan reported',
       payg: 'Pay-as-you-go',
-      vibeBudget: 'Vibe allowance',
       apiBudget: 'API budget',
       todayTokens: 'Today',
       tokens: 'tokens',
@@ -108,7 +107,6 @@ window.__ModuleLoader__.load({
       plan: '套餐',
       planUnknown: '未返回套餐',
       payg: '按量付费',
-      vibeBudget: 'Vibe 额度',
       apiBudget: 'API 额度',
       todayTokens: '今日',
       tokens: 'tokens',
@@ -430,7 +428,7 @@ window.__ModuleLoader__.load({
             ? h(
                 'div',
                 { className: 'mu-line' },
-                h('span', { className: 'mu-line-label' }, bar.source === 'account' ? (bar.budget === 'api' ? t('apiBudget') : t('vibeBudget')) : t('estimatedCost')),
+                h('span', { className: 'mu-line-label' }, bar.source === 'account' ? t('apiBudget') : t('estimatedCost')),
                 h('span', { className: 'mu-line-value' }, `${money(bar.value, bar.currency)} / ${money(bar.max, bar.currency)}`),
               )
             : null,
@@ -526,10 +524,12 @@ window.__ModuleLoader__.load({
         }
       }
 
+      // Only the API budget is shown: the Vibe allowance is spent by Vibe inside
+      // its own harness, not by this API key, so listing it here would read as
+      // spend that never happened.
       const budgets = []
-      if (consumption?.status === 'ok') {
-        if (consumption.vibe !== undefined) budgets.push({ key: 'vibe', label: t('vibeBudget'), budget: consumption.vibe })
-        if (consumption.api !== undefined) budgets.push({ key: 'api', label: t('apiBudget'), budget: consumption.api })
+      if (consumption?.status === 'ok' && consumption.api !== undefined) {
+        budgets.push({ key: 'api', label: t('apiBudget'), budget: consumption.api })
       }
 
       return h(
@@ -732,7 +732,7 @@ window.__ModuleLoader__.load({
     // #region styles
 
     const CSS = `
-.mu-card{box-sizing:border-box;display:flex;flex-direction:column;gap:6px;width:100%;min-width:0;margin:0 2px;padding:8px;border:1px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-size:12px;line-height:18px}
+.mu-card{box-sizing:border-box;display:flex;flex-direction:column;gap:6px;width:100%;min-width:0;margin:0;padding:8px 10px;border:1px solid var(--dsw-alias-border-l1);border-radius:12px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-size:12px;line-height:18px}
 .mu-card-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;min-width:0}
 .mu-card-title{font-size:12px;font-weight:600;line-height:18px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mu-card-plan{flex:none;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:50%}
@@ -744,7 +744,7 @@ window.__ModuleLoader__.load({
 .mu-line-value{font-variant-numeric:tabular-nums;white-space:nowrap}
 .mu-line-quiet .mu-line-label,.mu-line-quiet .mu-line-value{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
 .mu-line-error{color:var(--dsw-alias-state-error-primary);font-size:11px;line-height:16px;display:block}
-.mu-rail{box-sizing:border-box;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;width:36px;height:36px;border-radius:var(--dsw-radius-md);color:var(--dsw-alias-label-secondary)}
+.mu-rail{box-sizing:border-box;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;width:40px;height:40px;margin:0 auto;border-radius:10px;color:var(--dsw-alias-label-secondary)}
 .mu-rail-value{font-size:9px;line-height:10px;font-variant-numeric:tabular-nums}
 .mu-page{box-sizing:border-box;display:flex;flex-direction:column;gap:16px;max-width:760px;color:var(--dsw-alias-label-primary)}
 .mu-head{display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:12px}

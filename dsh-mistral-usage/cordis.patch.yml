@@ -11,9 +11,9 @@
 #   apiKeyEnv: MISTRAL_API_KEY      # credential reference holding the key
 #   baseURL: https://api.mistral.ai # Mistral API root
 #   currency: EUR                   # currency used when the API names none
-#   barBudget: vibe                 # which reported budget the bar tracks
-#                                   # (`vibe` allowance or `api` budget)
-#   barMax: 125                     # fallback 100% when no budget is reported
+#   barMax: 125                     # fallback 100% when no API budget is reported
+#                                   # (the Vibe allowance is never shown: Vibe
+#                                   # spends it in its own harness, not this key)
 #   requestTimeoutMs: 15000         # per-request timeout
 #   costMeter: true                 # mirror into dsh-cost-meter's "Mistral"
 #                                   # quota card when that plugin is installed
@@ -29,7 +29,6 @@
         apiKeyEnv: MISTRAL_API_KEY
         baseURL: https://api.mistral.ai
         currency: EUR
-        barBudget: vibe
         barMax: 125
         requestTimeoutMs: 15000
         costMeter: true
