@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Sidebar enhance",
+    "description": "One plugin, two components: (1) the right Sidebar opens at no more than one third of itself plus the conversation on the first opening of a Session or a fresh app launch; (2) every right-Sidebar page scrolls vertically, so no tool is cut off."
+  }
+}
