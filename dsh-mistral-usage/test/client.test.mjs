@@ -154,6 +154,63 @@ function flatten(node) {
   return `${own} ${flatten(children)}`
 }
 
+test('clicking the card asks the Host to re-probe the billing API', async () => {
+  const factory = loadFactory()
+  const plugin = factory((name) => {
+    if (name === 'react') return ReactStub
+    throw new Error(`unexpected require: ${name}`)
+  })
+  const { ctx, registrations, effects } = makeContext()
+  const restoreDocument = installDocument()
+
+  const calls = []
+  const realFetch = globalThis.fetch
+  globalThis.fetch = async (url, init) => {
+    calls.push(JSON.parse(init?.body ?? '{}'))
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        credential: { ref: 'MISTRAL_API_KEY', configured: true },
+        consumption: { status: 'ok', plan: 'EDU', currency: 'USD', api: { kind: 'api', spent: 1, limit: 15, percent: 6.7, currency: 'USD' } },
+        ledger: { today: { calls: 1, input: 1, output: 1, cacheRead: 0, cacheWrite: 0, reasoning: 0, cost: 0, byModel: [] }, total: { calls: 1 } },
+        bar: { value: 1, max: 15, percent: 6.7, source: 'account', budget: 'api', currency: 'USD' },
+        costMeter: { enabled: true, connected: false, windows: [] },
+      }),
+    }
+  }
+  try {
+    plugin.apply(ctx)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    const footer = registrations.find((entry) => entry.options?.name === 'sidebar.footer.action')
+    const card = footer.component({ wide: true })
+    assert.equal(card.props.role, 'button', 'the card is a button')
+    assert.equal(card.props.tabIndex, 0, 'the card is reachable by keyboard')
+    const before = calls.length
+    card.props.onClick()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal(calls.length, before + 1, 'a click asks the Host once more')
+    assert.equal(calls[calls.length - 1].refresh, true, 'the click asks for a fresh probe')
+
+    // Enter and Space do the same thing for keyboard users.
+    const again = calls.length
+    const prevented = { defaultPrevented: false, preventDefault() { this.defaultPrevented = true } }
+    card.props.onKeyDown({ key: 'Enter', preventDefault: prevented.preventDefault.bind(prevented) })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal(calls.length, again + 1, 'Enter refreshes')
+    assert.equal(prevented.defaultPrevented, true, 'Enter does not also submit a form')
+
+    // The rail tile is the same affordance.
+    const rail = footer.component({ wide: false })
+    assert.equal(rail.props.role, 'button')
+    assert.match(rail.props.className, /mu-clickable/)
+  } finally {
+    globalThis.fetch = realFetch
+    for (const dispose of effects) if (typeof dispose === 'function') dispose()
+    restoreDocument()
+  }
+})
+
 test('both surfaces render the figures the Host reports', async (t) => {
   const factory = loadFactory()
   const plugin = factory((name) => {

@@ -42,6 +42,12 @@ The card lives in the `sidebar.footer.action` seat, above the Settings button:
 - the amount used against the limit, and when it resets;
 - today's tokens, and today's call count with the estimated cost.
 
+**Clicking the card re-reads everything**: it asks the Host for a fresh probe,
+so the billing API is queried again and the bar, the amounts and today's tokens
+update in place. The card pulses while the request is in flight, and Enter or
+Space does the same from the keyboard. The 60 s poll in between reuses the
+Host's cached answer, so a click is the way to force a re-read.
+
 In the collapsed 56px rail the same figure becomes a ring with the percentage.
 
 ## What the Settings page shows

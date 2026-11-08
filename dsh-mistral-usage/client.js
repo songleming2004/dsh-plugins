@@ -53,6 +53,7 @@ window.__ModuleLoader__.load({
       used: '{pct}% used',
       remaining: '{amount} left',
       openSettings: 'Open Mistral usage settings',
+      clickToRefresh: 'Click to refresh',
       loading: 'Reading Mistral usage…',
       loadFailed: 'Could not read Mistral usage: {detail}',
       retry: 'Retry',
@@ -115,6 +116,7 @@ window.__ModuleLoader__.load({
       used: '已用 {pct}%',
       remaining: '剩余 {amount}',
       openSettings: '打开 Mistral 用量设置',
+      clickToRefresh: '点击刷新',
       loading: '正在读取 Mistral 用量…',
       loadFailed: '无法读取 Mistral 用量：{detail}',
       retry: '重试',
@@ -294,25 +296,37 @@ window.__ModuleLoader__.load({
     }
 
     /** Live usage snapshot shared by the sidebar card and the Settings page. */
-    const usageStore = createStore({ status: 'loading', data: null, error: null, at: 0, language: 'en' })
+    const usageStore = createStore({ status: 'loading', data: null, error: null, at: 0, language: 'en', busy: false })
+
+    /** The in-flight refresh, so a click and a poll never run two at once. */
+    let inFlight = null
 
     /**
      * Refresh the shared snapshot from the Host.
      * @param {boolean} refresh - ask the Host to re-probe the billing API.
      * @returns {Promise<void>}
      */
-    async function load(refresh) {
-      try {
-        const data = await callBridge('summary', { refresh: refresh === true })
-        usageStore.set({ ...usageStore.getSnapshot(), status: 'ready', data, error: null, at: Date.now() })
-      } catch (error) {
-        const previous = usageStore.getSnapshot()
-        usageStore.set({
-          ...previous,
-          status: previous.data === null ? 'error' : 'ready',
-          error: error instanceof Error ? error.message : String(error),
-        })
-      }
+    function load(refresh) {
+      if (inFlight !== null) return inFlight
+      const forced = refresh === true
+      if (forced) usageStore.set({ ...usageStore.getSnapshot(), busy: true })
+      inFlight = (async () => {
+        try {
+          const data = await callBridge('summary', { refresh: forced })
+          usageStore.set({ ...usageStore.getSnapshot(), status: 'ready', data, error: null, at: Date.now(), busy: false })
+        } catch (error) {
+          const previous = usageStore.getSnapshot()
+          usageStore.set({
+            ...previous,
+            status: previous.data === null ? 'error' : 'ready',
+            error: error instanceof Error ? error.message : String(error),
+            busy: false,
+          })
+        } finally {
+          inFlight = null
+        }
+      })()
+      return inFlight
     }
 
     /**
@@ -366,7 +380,8 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * The sidebar card: plan, both budgets and today's tokens.
+     * The sidebar card: plan, the API budget and today's tokens. Clicking it
+     * re-reads the figures from the Host, which re-probes the billing API.
      * @param {{ wide?: boolean }} props - owner props (whether the sidebar is wide).
      */
     function SidebarUsageCard({ wide }) {
@@ -380,16 +395,42 @@ window.__ModuleLoader__.load({
       const percent = percentOf(bar)
       const valueText = bar !== undefined ? `${Math.round(percent)}%` : '—'
       const label = t('nav')
+      const busy = snap.busy === true
       const plan = consumption?.status === 'ok' ? consumption.plan ?? t('planUnknown') : snap.status === 'loading' ? t('loading') : t('planUnknown')
 
+      /** Refresh on click, and on Enter/Space for keyboard users. */
+      const refresh = () => {
+        if (!busy) load(true)
+      }
+      const interactive = {
+        role: 'button',
+        tabIndex: 0,
+        'aria-busy': busy ? 'true' : 'false',
+        onClick: refresh,
+        onKeyDown: (event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault()
+            refresh()
+          }
+        },
+      }
+      const hint = busy ? t('refreshing') : t('clickToRefresh')
+      const title = `${label} · ${valueText} · ${hint}`
+
       if (wide === false) {
-        // Collapsed rail: a 36px tile carrying the ring and the percentage.
+        // Collapsed rail: a 40px tile carrying the ring and the percentage.
         return h(
           'div',
-          { className: 'mu-rail', title: `${label} · ${valueText}`, 'aria-label': `${label} ${valueText}`, role: 'img' },
+          {
+            ...interactive,
+            className: `mu-rail mu-clickable${busy ? ' mu-busy' : ''}`,
+            title,
+            'aria-label': `${label} ${valueText} · ${hint}`,
+          },
           h('svg', { viewBox: '0 0 36 36', width: 26, height: 26, 'aria-hidden': true },
             h('circle', { cx: 18, cy: 18, r: 14, fill: 'none', stroke: 'var(--dsw-alias-border-l3)', strokeWidth: 4 }),
             h('circle', {
+              className: 'mu-ring-fill',
               cx: 18,
               cy: 18,
               r: 14,
@@ -407,7 +448,13 @@ window.__ModuleLoader__.load({
 
       return h(
         'div',
-        { className: 'mu-card', 'data-plugin': '@local/dsh-mistral-usage' },
+        {
+          ...interactive,
+          className: `mu-card mu-clickable${busy ? ' mu-busy' : ''}`,
+          title,
+          'aria-label': `${label} · ${hint}`,
+          'data-plugin': '@local/dsh-mistral-usage',
+        },
         h(
           'div',
           { className: 'mu-card-head' },
@@ -745,6 +792,15 @@ window.__ModuleLoader__.load({
 .mu-line-quiet .mu-line-label,.mu-line-quiet .mu-line-value{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
 .mu-line-error{color:var(--dsw-alias-state-error-primary);font-size:11px;line-height:16px;display:block}
 .mu-rail{box-sizing:border-box;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;width:40px;height:40px;margin:0 auto;border-radius:10px;color:var(--dsw-alias-label-secondary)}
+.mu-clickable{cursor:pointer;transition:border-color .15s ease,background-color .15s ease}
+.mu-clickable:hover{border-color:var(--dsw-alias-state-business-primary);background:var(--dsw-alias-interactive-bg-hover)}
+.mu-clickable:active{transform:scale(.995)}
+.mu-clickable:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:1px}
+.mu-rail.mu-clickable:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}
+.mu-rail.mu-clickable:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:1px}
+@keyframes mu-refresh-pulse{0%,to{opacity:.55}50%{opacity:1}}
+.mu-busy{animation:mu-refresh-pulse 1.1s ease-in-out 2;cursor:progress}
+.mu-rail .mu-ring-fill{transition:stroke-dasharray .45s ease}
 .mu-rail-value{font-size:9px;line-height:10px;font-variant-numeric:tabular-nums}
 .mu-page{box-sizing:border-box;display:flex;flex-direction:column;gap:16px;max-width:760px;color:var(--dsw-alias-label-primary)}
 .mu-head{display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:12px}
