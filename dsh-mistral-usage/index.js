@@ -1,20 +1,26 @@
 /**
- * Host half of the Mistral usage bundle.
+ * Host half of the usage bundle.
  *
- * Three jobs, all owned by one plugin row:
+ * One plugin row serves two providers, because they answer the same question
+ * in different places:
  *
- * 1. Read the Mistral account's plan and monthly allowance from Mistral's
- *    public billing API with the key the `llm-pi-ai` Mistral route already uses.
- * 2. Fold the token usage of every Mistral request this Harness routed into
- *    one ledger, so the panel can show today's tokens and cost, per model,
- *    across sessions and across restarts.
- * 3. Mirror the same figures into `dsh-cost-meter`'s Coding Plan quota card
- *    when that plugin is installed, so the Mistral allowance sits beside the
- *    other plans in the sidebar and the Settings › Cost › Quotas page.
+ * - **Mistral** — the plan and monthly API budget come from Mistral's public
+ *   billing API with the key the `llm-pi-ai` Mistral route already uses, and
+ *   the token usage is folded from this Harness's own session logs.
+ * - **Magpie** — the local Magpie gateway (`127.0.0.1:3425`) already keeps
+ *   both: `GET /v1/magpie/quotas` reports each subscription's plan and windows,
+ *   and `GET /v1/magpie/usage?period=…` reports the calls, tokens and priced
+ *   cost it routed. Magpie is the source of truth for its own traffic, so its
+ *   figures are read rather than re-folded.
  *
- * Nothing here renders; the Client module owns the sidebar card and the
- * Settings page. The Client talks to this half over a same-origin JSON bridge
- * at `/api/mistral-usage/...`.
+ * The panel shows whichever provider the current session is using, so a switch
+ * of model route is a switch of the card. The Client half owns the rendering
+ * and talks to this half over a same-origin JSON bridge at
+ * `/api/mistral-usage/...` (the path keeps its original name so an installed
+ * profile keeps working across the upgrade).
+ *
+ * A third job is unchanged: mirror the Mistral allowance into
+ * `dsh-cost-meter`'s Coding Plan quota card when that plugin is installed.
  */
 
 import { execFile } from "node:child_process";
@@ -48,6 +54,21 @@ const COST_METER_PROVIDER = "mistral";
 const COST_METER_TTL_MS = 60_000;
 
 /**
+ * The two providers this bundle reports. `mistral` reads the vendor's billing
+ * API and this Harness's own session logs; `magpie` reads the local gateway,
+ * which already keeps both the subscription windows and its own traffic.
+ */
+const PROVIDERS = ["mistral", "magpie"];
+/** Default Magpie gateway root: the address the app serves its API on. */
+const DEFAULT_MAGPIE_BASE_URL = "http://127.0.0.1:3425";
+/** Credential reference the Magpie gateway route uses, when one is needed. */
+const DEFAULT_MAGPIE_KEY_ENV = "MAGPIE_GATEWAY_KEY";
+/** Magpie's own usage windows, in the order the page lists them. */
+const MAGPIE_PERIODS = ["today", "7d", "30d", "all"];
+/** Period shown when none is asked for. */
+const DEFAULT_MAGPIE_PERIOD = "30d";
+
+/**
  * The public billing endpoints Vibe itself reads (mistralai/mistral-vibe,
  * `vibe/app_server/_billing.py`). They answer to an ordinary API key — no
  * Admin API and no Enterprise plan needed — and report the plan plus how much
@@ -55,6 +76,14 @@ const COST_METER_TTL_MS = 60_000;
  */
 const BILLING_SUBSCRIPTION_PATH = "/v1/billing/subscription";
 const BILLING_BUDGET_PATH = "/v1/billing/budget";
+
+/**
+ * The Magpie gateway's read-only reporting endpoints. Both answer on the same
+ * port the agents use, so no extra service or credential is needed on the
+ * loopback interface.
+ */
+const MAGPIE_QUOTAS_PATH = "/v1/magpie/quotas";
+const MAGPIE_USAGE_PATH = "/v1/magpie/usage";
 
 /**
  * USD prices per million tokens, from Mistral's published price list
@@ -271,6 +300,206 @@ const LEDGER_DAYS = 400;
 
 // #endregion
 
+// #region provider routing
+
+/**
+ * Which provider a session's model route belongs to.
+ *
+ * The Magpie gateway is reached through a provider row named `magpie`, so a
+ * session on that route is a Magpie session even when the model behind it is
+ * Mistral's: Magpie is the one that routed the call and keeps its figures.
+ * Anything else that names Mistral is the direct Mistral route.
+ * @param {string | undefined} provider - the route's provider id.
+ * @returns {'magpie' | 'mistral' | undefined} the provider this bundle reports, or undefined for neither.
+ */
+function providerOfRoute(provider) {
+  const id = String(provider ?? "").toLowerCase();
+  if (id.length === 0) return undefined;
+  if (id === "magpie" || id.startsWith("magpie-") || id.startsWith("magpie/")) return "magpie";
+  if (id.startsWith("mistral")) return "mistral";
+  return undefined;
+}
+
+/**
+ * Coerce a requested provider name to one this bundle reports.
+ * @param {unknown} value - a requested provider.
+ * @returns {'magpie' | 'mistral' | undefined} the provider, or undefined when unknown.
+ */
+function normalizeProvider(value) {
+  const id = String(value ?? "").toLowerCase();
+  return PROVIDERS.includes(id) ? /** @type {'magpie' | 'mistral'} */ (id) : undefined;
+}
+
+/**
+ * Coerce a requested Magpie period to one the gateway accepts.
+ * @param {unknown} value - a requested period.
+ * @returns {string} a period the gateway understands.
+ */
+function normalizeMagpiePeriod(value) {
+  const id = String(value ?? "").toLowerCase();
+  return MAGPIE_PERIODS.includes(id) ? id : DEFAULT_MAGPIE_PERIOD;
+}
+
+/**
+ * Normalize one Magpie quota window.
+ *
+ * Magpie reports `used` as a percentage of the window and `amount` as the money
+ * spent against `limit`, so both the bar and the amounts are already there.
+ * @param {unknown} detail - one entry of a quota's `windows`.
+ * @returns {{ name: string; percent: number; spent?: number; limit?: number; remaining?: number; currency?: string; resetAt?: string; unit?: string } | undefined} the window.
+ */
+function normalizeMagpieWindow(detail) {
+  if (detail === null || typeof detail !== "object") return undefined;
+  const record = /** @type {Record<string, unknown>} */ (detail);
+  const name = typeof record.name === "string" && record.name.length > 0 ? record.name : "Window";
+  const used = Number(record.used);
+  const percent = Number.isFinite(used) ? Math.max(0, used) : undefined;
+  const spent = Number(record.amount);
+  const limit = Number(record.limit);
+  const remaining = Number(record.remaining);
+  const unit = typeof record.unit === "string" ? record.unit : undefined;
+  if (percent === undefined && !Number.isFinite(limit)) return undefined;
+  return {
+    name,
+    percent: percent ?? (Number.isFinite(limit) && limit > 0 && Number.isFinite(spent) ? (spent / limit) * 100 : 0),
+    spent: Number.isFinite(spent) ? spent : undefined,
+    limit: Number.isFinite(limit) && limit > 0 ? limit : undefined,
+    remaining: Number.isFinite(remaining) ? remaining : undefined,
+    currency: unit !== undefined && /^[A-Za-z]{3}$/.test(unit) ? unit.toUpperCase() : undefined,
+    resetAt: typeof record.resetsAt === "string" ? record.resetsAt : undefined,
+    unit,
+  };
+}
+
+/**
+ * Normalize `GET /v1/magpie/quotas` into the list the panel renders.
+ *
+ * Each entry is one subscription (a provider's account) with its plan and
+ * windows; the first window leads the card.
+ * @param {unknown} payload - the endpoint body (`{ data: [...] }`).
+ * @returns {{ subscriptions: object[] } | undefined} the view, or undefined when the body carried none.
+ */
+function normalizeMagpieQuotas(payload) {
+  const list =
+    payload !== null && typeof payload === "object" && Array.isArray(/** @type {any} */ (payload).data)
+      ? /** @type {any[]} */ (/** @type {any} */ (payload).data)
+      : Array.isArray(payload)
+        ? /** @type {any[]} */ (payload)
+        : undefined;
+  if (list === undefined) return undefined;
+  const subscriptions = [];
+  for (const entry of list) {
+    if (entry === null || typeof entry !== "object") continue;
+    const record = /** @type {Record<string, unknown>} */ (entry);
+    const windows = Array.isArray(record.windows)
+      ? record.windows.map(normalizeMagpieWindow).filter((window) => window !== undefined)
+      : [];
+    if (windows.length === 0) continue;
+    subscriptions.push({
+      provider: typeof record.provider === "string" ? record.provider : "unknown",
+      name: typeof record.name === "string" && record.name.length > 0 ? record.name : String(record.provider ?? "Magpie"),
+      plan: typeof record.plan === "string" ? record.plan : undefined,
+      kind: typeof record.kind === "string" ? record.kind : undefined,
+      windows,
+      readAt: typeof record.readAt === "string" ? record.readAt : undefined,
+      lastServedAt: typeof record.lastServedAt === "string" ? record.lastServedAt : undefined,
+      last: record.last === true,
+    });
+  }
+  if (subscriptions.length === 0) return undefined;
+  return { subscriptions };
+}
+
+/**
+ * Normalize `GET /v1/magpie/usage` into the ledger shape the panel renders, so
+ * the Magpie view and the Mistral view share one renderer.
+ *
+ * Magpie prices its own calls (`cost`, `unpriced`), so no local price table is
+ * involved: these are the figures the gateway recorded.
+ * @param {unknown} payload - the endpoint body.
+ * @returns {object | undefined} the ledger view, or undefined when the body carried none.
+ */
+function normalizeMagpieUsage(payload) {
+  if (payload === null || typeof payload !== "object") return undefined;
+  const record = /** @type {Record<string, unknown>} */ (payload);
+  const count = (value) => (Number.isFinite(Number(value)) ? Number(value) : 0);
+  const totals = (source) => {
+    const entry = source !== null && typeof source === "object" ? /** @type {Record<string, unknown>} */ (source) : {};
+    return {
+      calls: count(entry.calls),
+      errors: count(entry.errors),
+      input: count(entry.input),
+      output: count(entry.output),
+      cacheRead: count(entry.cache_read),
+      cacheWrite: count(entry.cache_write),
+      reasoning: count(entry.reasoning),
+      cost: count(entry.cost),
+      unpriced: count(entry.unpriced),
+    };
+  };
+  const models = Array.isArray(record.models)
+    ? record.models
+        .filter((entry) => entry !== null && typeof entry === "object")
+        .map((entry) => {
+          const row = /** @type {Record<string, unknown>} */ (entry);
+          return {
+            model: typeof row.id === "string" ? row.id : String(row.model ?? "unknown"),
+            provider: typeof row.provider === "string" ? row.provider : undefined,
+            name: typeof row.name === "string" ? row.name : undefined,
+            ...totals(row),
+            priceSource: "magpie",
+          };
+        })
+        .sort((left, right) => right.cost - left.cost)
+    : [];
+  const series = Array.isArray(record.series)
+    ? record.series
+        .filter((entry) => entry !== null && typeof entry === "object")
+        .map((entry) => {
+          const point = /** @type {Record<string, unknown>} */ (entry);
+          return {
+            label: typeof point.label === "string" ? point.label : "",
+            time: typeof point.time === "string" ? point.time : undefined,
+            ...totals(point),
+          };
+        })
+    : [];
+  const agents = Array.isArray(record.agents)
+    ? record.agents
+        .filter((entry) => entry !== null && typeof entry === "object")
+        .map((entry) => {
+          const row = /** @type {Record<string, unknown>} */ (entry);
+          return {
+            id: typeof row.id === "string" ? row.id : "",
+            name: typeof row.name === "string" ? row.name : String(row.id ?? ""),
+            ...totals(row),
+          };
+        })
+        .sort((left, right) => right.cost - left.cost)
+    : [];
+  const total = totals(record);
+  const today = series.length > 0 ? series[series.length - 1] : undefined;
+  return {
+    period: typeof record.period === "string" ? record.period : DEFAULT_MAGPIE_PERIOD,
+    since: typeof record.since === "string" ? record.since : undefined,
+    bucket: typeof record.bucket === "string" ? record.bucket : undefined,
+    path: typeof record.path === "string" ? record.path : undefined,
+    // The period total leads the figures; the newest bucket stands in for
+    // "today" so the card keeps the same two rows as the Mistral view.
+    today: today ?? { ...total, calls: 0 },
+    total,
+    byModel: models,
+    series,
+    agents,
+    sessionCount: count(record.sessionCount),
+    currency: "USD",
+    seeded: true,
+    source: "magpie",
+  };
+}
+
+// #endregion
+
 // #region durable history
 
 /**
@@ -347,6 +576,10 @@ async function decompressSession(file) {
  * Fold one decompressed log into per-day, per-model Mistral usage, counting
  * only events older than `cutoffMs` so the live waterfall and this history
  * never overlap.
+ *
+ * Only the direct Mistral route counts here: a session routed through Magpie is
+ * Magpie's traffic, and Magpie reports it itself, so folding it here would
+ * count the same call twice across the two views.
  * @param {string} raw - decompressed JSONL text.
  * @param {number} cutoffMs - exclusive upper bound on an event's `time`.
  * @returns {{ days: Record<string, object>; maxTime: number }} the fold.
@@ -368,7 +601,7 @@ function foldSession(raw, cutoffMs) {
     const usage = data.usage;
     if (usage === null || typeof usage !== "object") continue;
     const source = data.message?.source ?? {};
-    if (!/^mistral/i.test(String(source.provider ?? ""))) continue;
+    if (providerOfRoute(source.provider) !== "mistral") continue;
     if (typeof event.time === "number" && event.time >= cutoffMs) continue;
     const model = String(source.model ?? "unknown");
     const at = typeof event.time === "number" ? event.time : Date.now();
@@ -402,8 +635,8 @@ function foldSession(raw, cutoffMs) {
 // #region usage service
 
 /**
- * Owns the credential lookup, the billing probe, the local token ledger and
- * the mirror into `dsh-cost-meter`.
+ * Owns the credential lookup, the billing probe, the local token ledger, the
+ * Magpie gateway reads and the mirror into `dsh-cost-meter`.
  */
 class MistralUsage {
   /**
@@ -415,6 +648,8 @@ class MistralUsage {
    * @param {number} options.barMax - spend at which the sidebar bar reads 100% when no budget is reported.
    * @param {number} options.requestTimeoutMs - per-request timeout.
    * @param {boolean} options.costMeter - whether to publish into `dsh-cost-meter`.
+   * @param {string} options.magpieBaseURL - Magpie gateway root.
+   * @param {string} options.magpieKeyEnv - credential reference the gateway route uses.
    * @param {object} options.logger - Cordis logger.
    */
   constructor(options) {
@@ -425,6 +660,11 @@ class MistralUsage {
     this.barMax = options.barMax;
     this.requestTimeoutMs = options.requestTimeoutMs;
     this.costMeterEnabled = options.costMeter !== false;
+    this.magpieBaseURL = (typeof options.magpieBaseURL === "string" && options.magpieBaseURL.length > 0
+      ? options.magpieBaseURL
+      : DEFAULT_MAGPIE_BASE_URL
+    ).replace(/\/+$/, "");
+    this.magpieKeyEnv = options.magpieKeyEnv ?? DEFAULT_MAGPIE_KEY_ENV;
     this.logger = options.logger;
     /**
      * Per-day Mistral usage this Harness routed: `{ [YYYY-MM-DD]: { calls,
@@ -444,80 +684,124 @@ class MistralUsage {
     this.costMeterCache = undefined;
     /** In-flight `dsh-cost-meter` call. */
     this.costMeterInFlight = undefined;
+    /**
+     * The provider each session's model route belongs to, keyed by session id.
+     * Filled from the `llm/stream` waterfall, which is the only place the Host
+     * learns which route a session is actually on.
+     */
+    this.sessionProviders = new Map();
+    /** Most recent provider seen on any route, used when no session is known. */
+    this.lastProvider = undefined;
+    /** Magpie answers, keyed by `quotas` or `usage:<period>`, each with the time it was read. */
+    this.magpieCache = new Map();
+    /** In-flight Magpie reads, so a burst of polls asks once. */
+    this.magpieInFlight = new Map();
+  }
+
+  /**
+   * Note the route a session is using, so the panel can follow it.
+   * @param {string | undefined} sessionId - the calling session.
+   * @param {string | undefined} provider - the route's provider id.
+   */
+  observeRoute(sessionId, provider) {
+    const routed = providerOfRoute(provider);
+    if (routed === undefined) return;
+    if (typeof sessionId === "string" && sessionId.length > 0) this.sessionProviders.set(sessionId, routed);
+    this.lastProvider = routed;
+  }
+
+  /**
+   * The provider a session is on, falling back to the last route seen.
+   * @param {string | undefined} sessionId - the calling session.
+   * @returns {'magpie' | 'mistral' | undefined} the provider, or undefined when nothing is known yet.
+   */
+  providerFor(sessionId) {
+    if (typeof sessionId === "string" && sessionId.length > 0) {
+      const known = this.sessionProviders.get(sessionId);
+      if (known !== undefined) return known;
+    }
+    return this.lastProvider;
   }
 
   /**
    * Resolve the key through the credential seam, falling back to the process
    * environment when the seam is absent or holds nothing.
+   * @param {string} [ref] - credential reference to resolve.
    * @returns {Promise<{ value: string; source: string } | undefined>} the key and where it came from.
    */
-  async resolveKey() {
+  async resolveKey(ref = this.apiKeyEnv) {
     const credentials = this.ctx.get("credentials");
     if (credentials !== undefined) {
       try {
-        const hit = await credentials.resolve(this.apiKeyEnv);
+        const hit = await credentials.resolve(ref);
         if (hit !== undefined && hit.value.length > 0) return { value: hit.value, source: hit.source };
       } catch (error) {
-        this.logger.warn(`mistral-usage: credential lookup for ${this.apiKeyEnv} failed: ${String(error)}`);
+        this.logger.warn(`mistral-usage: credential lookup for ${ref} failed: ${String(error)}`);
       }
     }
-    const ambient = process.env[this.apiKeyEnv];
+    const ambient = process.env[ref];
     if (typeof ambient === "string" && ambient.trim().length > 0) return { value: ambient.trim(), source: "environment" };
     return undefined;
   }
 
   /**
    * Describe the credential without exposing it.
+   * @param {string} [ref] - credential reference to describe.
    * @returns {Promise<object>} configured state, source, and writability.
    */
-  async describeKey() {
+  async describeKey(ref = this.apiKeyEnv) {
     const credentials = this.ctx.get("credentials");
     if (credentials !== undefined) {
       try {
-        const info = await credentials.describe(this.apiKeyEnv);
-        return { ref: this.apiKeyEnv, configured: info.configured, source: info.source, writable: info.writable };
+        const info = await credentials.describe(ref);
+        return { ref, configured: info.configured, source: info.source, writable: info.writable };
       } catch {
         /* fall through to the ambient answer */
       }
     }
-    const ambient = process.env[this.apiKeyEnv];
+    const ambient = process.env[ref];
     const configured = typeof ambient === "string" && ambient.trim().length > 0;
-    return { ref: this.apiKeyEnv, configured, source: configured ? "environment" : undefined, writable: false };
+    return { ref, configured, source: configured ? "environment" : undefined, writable: false };
   }
 
   /**
    * Store a key through the credential seam.
    * @param {string} value - the raw key.
+   * @param {string} [ref] - credential reference to write.
    * @returns {Promise<object>} the fresh credential description.
    */
-  async setKey(value) {
+  async setKey(value, ref = this.apiKeyEnv) {
     const credentials = this.ctx.get("credentials");
     if (credentials === undefined) throw new Error("this Harness has no credentials service; export the key in the launching environment instead");
-    await credentials.set(this.apiKeyEnv, value);
-    this.lastConsumption = undefined;
-    return this.describeKey();
+    await credentials.set(ref, value);
+    if (ref === this.apiKeyEnv) this.lastConsumption = undefined;
+    this.magpieCache.clear();
+    return this.describeKey(ref);
   }
 
   /**
    * Remove the stored key.
+   * @param {string} [ref] - credential reference to clear.
    * @returns {Promise<object>} the fresh credential description.
    */
-  async clearKey() {
+  async clearKey(ref = this.apiKeyEnv) {
     const credentials = this.ctx.get("credentials");
     if (credentials === undefined) throw new Error("this Harness has no credentials service");
-    await credentials.unset(this.apiKeyEnv);
-    this.lastConsumption = undefined;
-    return this.describeKey();
+    await credentials.unset(ref);
+    if (ref === this.apiKeyEnv) this.lastConsumption = undefined;
+    this.magpieCache.clear();
+    return this.describeKey(ref);
   }
 
   /**
-   * Ask one billing endpoint.
+   * Ask one endpoint.
    * @param {string} route - endpoint path.
    * @param {string} key - resolved API key.
+   * @param {string} [root] - API root; defaults to the Mistral one.
    * @returns {Promise<{ status: number; payload?: unknown; error?: string }>} the answer.
    */
-  async probe(route, key) {
-    const response = await fetch(`${this.baseURL}${route}`, {
+  async probe(route, key, root = this.baseURL) {
+    const response = await fetch(`${root}${route}`, {
       headers: { authorization: `Bearer ${key}`, accept: "application/json" },
       signal: AbortSignal.timeout(this.requestTimeoutMs),
     });
@@ -587,6 +871,133 @@ class MistralUsage {
     this.lastConsumption = { ...normalized, fetchedAt: Date.now() };
     this.lastFailure = undefined;
     return { status: "ok", ref: this.apiKeyEnv, source: key.source, ...this.lastConsumption };
+  }
+
+  /**
+   * Read one Magpie reporting endpoint.
+   *
+   * The gateway answers on the loopback interface without a credential; when it
+   * is configured to require one, the route's own key is sent. A refused or
+   * unreachable gateway is reported, never thrown.
+   * @param {string} route - endpoint path with its query.
+   * @param {boolean} force - ignore the cached answer.
+   * @returns {Promise<{ status: 'ok'; payload: unknown } | { status: 'unreachable' | 'refused' | 'unavailable'; message: string }>} the answer.
+   */
+  async readMagpie(route, force) {
+    const cacheKey = route;
+    const cached = this.magpieCache.get(cacheKey);
+    if (!force && cached !== undefined && Date.now() - cached.at < COST_METER_TTL_MS) return cached.answer;
+    const inFlight = this.magpieInFlight.get(cacheKey);
+    if (inFlight !== undefined) return inFlight;
+    const read = (async () => {
+      const headers = { accept: "application/json" };
+      const key = await this.resolveKey(this.magpieKeyEnv);
+      if (key !== undefined) headers.authorization = `Bearer ${key.value}`;
+      let response;
+      try {
+        response = await fetch(`${this.magpieBaseURL}${route}`, {
+          headers,
+          signal: AbortSignal.timeout(this.requestTimeoutMs),
+        });
+      } catch (error) {
+        return {
+          status: /** @type {const} */ ("unreachable"),
+          message: `Magpie is not answering at ${this.magpieBaseURL} (${error instanceof Error ? error.message : String(error)})`,
+        };
+      }
+      const text = await response.text();
+      if (text.length > MAX_RESPONSE_BYTES) return { status: /** @type {const} */ ("unavailable"), message: "Magpie's answer is too large" };
+      if (response.status === 401 || response.status === 403) {
+        return { status: /** @type {const} */ ("refused"), message: `Magpie refused the gateway key (HTTP ${response.status})` };
+      }
+      if (!response.ok) {
+        return { status: /** @type {const} */ ("unavailable"), message: `Magpie answered HTTP ${response.status}` };
+      }
+      let payload;
+      try {
+        payload = JSON.parse(text);
+      } catch {
+        return { status: /** @type {const} */ ("unavailable"), message: "Magpie returned no JSON" };
+      }
+      return { status: /** @type {const} */ ("ok"), payload };
+    })();
+    this.magpieInFlight.set(cacheKey, read);
+    try {
+      const answer = await read;
+      this.magpieCache.set(cacheKey, { at: Date.now(), answer });
+      return answer;
+    } finally {
+      this.magpieInFlight.delete(cacheKey);
+    }
+  }
+
+  /**
+   * The Magpie view: the subscription windows and the traffic Magpie routed.
+   * @param {{ refresh?: boolean; period?: string }} options - whether to re-read, and which usage period.
+   * @returns {Promise<object>} the view.
+   */
+  async magpieView(options) {
+    const force = options?.refresh === true;
+    const period = normalizeMagpiePeriod(options?.period);
+    const [quotasAnswer, usageAnswer] = await Promise.all([
+      this.readMagpie(MAGPIE_QUOTAS_PATH, force),
+      this.readMagpie(`${MAGPIE_USAGE_PATH}?period=${encodeURIComponent(period)}`, force),
+    ]);
+    const quotas = quotasAnswer.status === "ok" ? normalizeMagpieQuotas(quotasAnswer.payload) : undefined;
+    const usage = usageAnswer.status === "ok" ? normalizeMagpieUsage(usageAnswer.payload) : undefined;
+    const problem = quotasAnswer.status !== "ok" ? quotasAnswer : usageAnswer.status !== "ok" ? usageAnswer : undefined;
+    const status =
+      problem === undefined
+        ? "ok"
+        : quotas === undefined && usage === undefined
+          ? problem.status === "unreachable"
+            ? "unreachable"
+            : problem.status === "refused"
+              ? "refused"
+              : "unavailable"
+          : "partial";
+    const subscriptions = quotas?.subscriptions ?? [];
+    // The subscription Magpie served most recently leads the card; without one,
+    // the first listed does.
+    const lead = subscriptions.find((entry) => entry.last === true) ?? subscriptions[0];
+    const window = lead?.windows?.[0];
+    const bar =
+      window !== undefined
+        ? {
+            value: window.spent,
+            max: window.limit,
+            percent: window.percent,
+            source: "account",
+            budget: window.name,
+            currency: window.currency ?? "USD",
+            resetAt: window.resetAt,
+            subscription: lead.provider,
+          }
+        : usage !== undefined
+          ? { value: usage.total.cost, max: this.barMax, source: "harness", currency: usage.currency }
+          : { value: 0, max: this.barMax, source: "harness", currency: "USD" };
+    return {
+      provider: "magpie",
+      status,
+      message: problem === undefined ? undefined : problem.message,
+      baseURL: this.magpieBaseURL,
+      // The gateway answers without a credential on the loopback interface, so
+      // the key card reports the reference rather than demanding a value.
+      magpieCredential: await this.describeKey(this.magpieKeyEnv),
+      period,
+      periods: MAGPIE_PERIODS,
+      subscriptions,
+      plan: lead?.plan,
+      subscription: lead?.provider,
+      // The windows of the leading subscription, flattened for the card.
+      windows: lead?.windows ?? [],
+      usage,
+      // The same figures under the ledger name, so one renderer serves both
+      // providers: `today`, `total` and `byModel` mean the same thing here.
+      ledger: usage,
+      bar,
+      fetchedAt: Date.now(),
+    };
   }
 
   /**
@@ -786,12 +1197,12 @@ class MistralUsage {
   }
 
   /**
-   * Everything the panel and the tool report.
+   * The Mistral view: the API budget and this Harness's own Mistral spend.
    * @param {{ refresh?: boolean }} options - whether to re-probe the billing API.
    * @param {(model: string) => { prices: object; source: string }} pricesFor - price lookup.
    * @returns {Promise<object>} the usage view.
    */
-  async view(options, pricesFor) {
+  async mistralView(options, pricesFor) {
     if (!this.seeded && this.seedPromise !== undefined) {
       try {
         await this.seedPromise;
@@ -828,6 +1239,8 @@ class MistralUsage {
         : { value: ledger.total.cost, max: this.barMax, source: "harness", currency: ledger.currency };
     const costMeter = await this.costMeterPlan(options?.refresh === true);
     return {
+      provider: "mistral",
+      status: consumption.status === "ok" ? "ok" : consumption.status,
       credential,
       // Only the API budget is exposed: the Vibe allowance belongs to Vibe's own
       // harness, so sending it would invite a surface to show it as this key's.
@@ -851,6 +1264,7 @@ class MistralUsage {
               fetchedAt: consumption.fetchedAt,
             }
           : consumption,
+      plan: consumption.status === "ok" ? consumption.plan : undefined,
       ledger,
       bar,
       costMeter: {
@@ -860,6 +1274,32 @@ class MistralUsage {
         status: typeof costMeter?.status === "string" ? costMeter.status : undefined,
         windows: costMeter?.windows !== null && typeof costMeter?.windows === "object" ? Object.keys(costMeter.windows) : [],
       },
+      fetchedAt: Date.now(),
+    };
+  }
+
+  /**
+   * Everything the panel and the tool report, for one provider.
+   *
+   * The answer always names both providers so the panel can offer the switch,
+   * but only the requested one is read: a Magpie session never calls the
+   * Mistral billing API, and the other way round.
+   * @param {{ refresh?: boolean; provider?: string; sessionId?: string; period?: string }} options - what to read.
+   * @param {(model: string) => { prices: object; source: string }} pricesFor - price lookup.
+   * @returns {Promise<object>} the view.
+   */
+  async view(options, pricesFor) {
+    const requested = normalizeProvider(options?.provider);
+    const followed = this.providerFor(options?.sessionId);
+    const provider = requested ?? followed ?? "mistral";
+    const detail =
+      provider === "magpie" ? await this.magpieView(options) : await this.mistralView(options, pricesFor);
+    return {
+      ...detail,
+      provider,
+      // The route the current session is on, so the panel can follow it.
+      followed: followed ?? null,
+      providers: PROVIDERS,
       updatedAt: Date.now(),
     };
   }
@@ -916,8 +1356,23 @@ export function apply(ctx, config = {}) {
   const barMax = Number.isFinite(config.barMax) && config.barMax > 0 ? config.barMax : 125;
   const requestTimeoutMs = Number.isFinite(config.requestTimeoutMs) && config.requestTimeoutMs > 0 ? config.requestTimeoutMs : 15_000;
   const costMeter = config.costMeter !== false;
+  const magpieBaseURL =
+    typeof config.magpieBaseURL === "string" && config.magpieBaseURL.length > 0 ? config.magpieBaseURL : DEFAULT_MAGPIE_BASE_URL;
+  const magpieKeyEnv =
+    typeof config.magpieKeyEnv === "string" && config.magpieKeyEnv.length > 0 ? config.magpieKeyEnv : DEFAULT_MAGPIE_KEY_ENV;
 
-  const usage = new MistralUsage({ ctx, apiKeyEnv, baseURL, currency, barMax, requestTimeoutMs, costMeter, logger });
+  const usage = new MistralUsage({
+    ctx,
+    apiKeyEnv,
+    baseURL,
+    currency,
+    barMax,
+    requestTimeoutMs,
+    costMeter,
+    magpieBaseURL,
+    magpieKeyEnv,
+    logger,
+  });
 
   const configuredPrices = config.prices !== null && typeof config.prices === "object" ? config.prices : {};
 
@@ -1031,12 +1486,17 @@ export function apply(ctx, config = {}) {
     }, "mistral-usage: cost-meter provider");
   }
 
-  // Account every Harness request routed to a Mistral route.
+  // Note which provider each session is routed through, and account every
+  // Harness request that went straight to Mistral. A Magpie-routed call is
+  // Magpie's own traffic and Magpie reports it, so it is not folded here.
   ctx.inject(["llm"], (sctx) => {
     sctx.effect(() => {
       const disposeListener = sctx.on("llm/stream", (options, next) => {
         const provider = String(options?.provider ?? "");
-        if (!/^mistral/i.test(provider)) return next();
+        const routed = providerOfRoute(provider);
+        const sessionId = typeof options?.sessionId === "string" ? options.sessionId : undefined;
+        usage.observeRoute(sessionId, provider);
+        if (routed !== "mistral") return next();
         const model = String(options?.model ?? "unknown");
         const inner = next();
         return (async function* accounted() {
@@ -1072,9 +1532,16 @@ export function apply(ctx, config = {}) {
         handler: async (req, res) => {
           if (!guard(req, res)) return;
           const body = await readJsonBody(req);
-          const refresh = body !== null && typeof body === "object" && /** @type {any} */ (body).refresh === true;
+          const record = body !== null && typeof body === "object" ? /** @type {any} */ (body) : {};
           try {
-            writeJson(res, 200, await usage.view({ refresh }, pricesFor));
+            writeJson(
+              res,
+              200,
+              await usage.view(
+                { refresh: record.refresh === true, provider: record.provider, sessionId: record.sessionId, period: record.period },
+                pricesFor,
+              ),
+            );
           } catch (error) {
             writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) });
           }
@@ -1091,6 +1558,7 @@ export function apply(ctx, config = {}) {
             return;
           }
           const action = /** @type {any} */ (body)?.action;
+          const ref = normalizeProvider(/** @type {any} */ (body)?.provider) === "magpie" ? magpieKeyEnv : apiKeyEnv;
           try {
             if (action === "set") {
               const value = /** @type {any} */ (body)?.value;
@@ -1098,11 +1566,11 @@ export function apply(ctx, config = {}) {
                 writeJson(res, 400, { error: "a non-empty key is required" });
                 return;
               }
-              writeJson(res, 200, { ok: true, credential: await usage.setKey(value.trim()) });
+              writeJson(res, 200, { ok: true, credential: await usage.setKey(value.trim(), ref) });
               return;
             }
             if (action === "clear") {
-              writeJson(res, 200, { ok: true, credential: await usage.clearKey() });
+              writeJson(res, 200, { ok: true, credential: await usage.clearKey(ref) });
               return;
             }
             writeJson(res, 400, { error: `unknown action: ${String(action)}` });
@@ -1124,11 +1592,13 @@ export function apply(ctx, config = {}) {
         sctx.tools.register({
           name: "mistral_usage",
           description:
-            "Report Mistral API usage for the configured key: the plan and monthly allowance Mistral's billing API returns, and the tokens and estimated cost this Harness itself spent on Mistral models today and in total.",
+            "Report model-provider usage for this Harness. With provider=mistral: the plan and monthly API budget Mistral's billing API returns, plus the tokens and estimated cost this Harness itself spent on Mistral models. With provider=magpie: the subscriptions and quota windows the local Magpie gateway reports, plus the calls, tokens and priced cost Magpie routed. Defaults to the provider the current session is routed through.",
           parameters: {
             type: "object",
             properties: {
-              refresh: { type: "boolean", description: "Re-probe the Mistral billing API instead of using the last answer." },
+              provider: { type: "string", enum: ["mistral", "magpie"], description: "Which provider to report; defaults to the one this session is routed through." },
+              refresh: { type: "boolean", description: "Re-read the vendor instead of using the last answer." },
+              period: { type: "string", enum: MAGPIE_PERIODS, description: "Magpie usage window (magpie only)." },
             },
           },
           output: {
@@ -1141,10 +1611,53 @@ export function apply(ctx, config = {}) {
             render: (_args, value) => [{ type: "text", text: String(value?.text ?? "") }],
           },
           async execute(args) {
-            const refresh = args !== null && typeof args === "object" && args.refresh === true;
-            const view = await usage.view({ refresh }, pricesFor);
-            const { consumption, ledger, credential } = view;
+            const record = args !== null && typeof args === "object" ? args : {};
+            const view = await usage.view(
+              { refresh: record.refresh === true, provider: record.provider, period: record.period },
+              pricesFor,
+            );
             const lines = [];
+            if (view.provider === "magpie") {
+              if (view.status === "unreachable" || view.status === "refused" || view.status === "unavailable") {
+                lines.push(`Magpie figures unavailable (${view.status}): ${view.message ?? ""}`);
+                return { text: lines.join("\n") };
+              }
+              for (const subscription of view.subscriptions) {
+                const windows = subscription.windows
+                  .map((window) => {
+                    const amount =
+                      window.limit !== undefined
+                        ? ` ${money(window.spent, window.currency)} of ${money(window.limit, window.currency)}`
+                        : "";
+                    return `${window.name} ${window.percent.toFixed(1)}%${amount}${window.resetAt !== undefined ? `, resets ${window.resetAt}` : ""}`;
+                  })
+                  .join("; ");
+                lines.push(`${subscription.name}${subscription.plan !== undefined ? ` (${subscription.plan})` : ""}: ${windows}`);
+              }
+              const usageView = view.usage;
+              if (usageView !== undefined) {
+                const total = usageView.total;
+                lines.push(
+                  `Magpie ${usageView.period}: ${total.calls} calls, ${total.errors} errors, ${total.input + total.cacheRead + total.cacheWrite} input + ${total.output} output tokens, ${money(total.cost, "USD")}${total.unpriced > 0 ? ` (${total.unpriced} unpriced)` : ""}.`,
+                );
+                if (usageView.byModel.length > 0) {
+                  const top = usageView.byModel
+                    .slice(0, 5)
+                    .map((entry) => `${entry.model} ${entry.calls} calls / ${money(entry.cost, "USD")}`)
+                    .join("; ");
+                  lines.push(`By model: ${top}`);
+                }
+                if (usageView.agents.length > 0) {
+                  const agents = usageView.agents
+                    .slice(0, 5)
+                    .map((entry) => `${entry.name} ${entry.calls} calls / ${money(entry.cost, "USD")}`)
+                    .join("; ");
+                  lines.push(`By agent: ${agents}`);
+                }
+              }
+              return { text: lines.join("\n") };
+            }
+            const { consumption, ledger, credential } = view;
             if (consumption.status === "ok") {
               lines.push(`Mistral plan: ${consumption.plan ?? "unknown"}`);
               const budget = consumption.api;
@@ -1243,6 +1756,64 @@ async function queryMistralQuota(key, baseURL, timeoutMs) {
 }
 
 /**
+ * Ask the local Magpie gateway for its subscription windows in the shape
+ * `dsh-cost-meter` renders.
+ *
+ * Magpie already reports both the percentage used and the money spent, so each
+ * subscription's leading window becomes a `percent` window and its remaining
+ * amount a text row. A gateway that is not running is a soft failure: the card
+ * says so instead of showing a zero.
+ * @param {string} _key - unused; the loopback gateway needs no credential.
+ * @param {string} baseURL - Magpie gateway root.
+ * @param {number} timeoutMs - per-request timeout.
+ * @returns {Promise<{ windows: Record<string, object>; endpoint: string }>} the quota answer.
+ */
+async function queryMagpieQuota(_key, baseURL, timeoutMs) {
+  const url = `${String(baseURL ?? DEFAULT_MAGPIE_BASE_URL).replace(/\/+$/, "")}${MAGPIE_QUOTAS_PATH}`;
+  let response;
+  try {
+    response = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(timeoutMs) });
+  } catch (error) {
+    const soft = new Error(`Magpie is not answering at ${url} (${error instanceof Error ? error.message : String(error)})`);
+    soft.soft = true;
+    throw soft;
+  }
+  if (response.status === 401 || response.status === 403) {
+    const error = new Error(`Magpie refused the gateway key (HTTP ${response.status})`);
+    error.soft = true;
+    throw error;
+  }
+  if (!response.ok) throw new Error(`Magpie answered HTTP ${response.status}`);
+  const text = await response.text();
+  if (text.length > MAX_RESPONSE_BYTES) throw new Error("Magpie's answer is too large");
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    throw new Error("Magpie returned no JSON");
+  }
+  const view = normalizeMagpieQuotas(payload);
+  if (view === undefined) throw new Error("Magpie reported no quota window");
+  const windows = {};
+  for (const subscription of view.subscriptions) {
+    const window = subscription.windows[0];
+    if (window === undefined) continue;
+    // The subscription's own provider id keys the row, so several
+    // subscriptions sit side by side with the same names the app uses.
+    windows[subscription.provider] = {
+      percent: Math.max(0, Math.min(100, Math.round(window.percent * 10) / 10)),
+      resetsAt: window.resetAt ?? "",
+    };
+  }
+  const lead = view.subscriptions.find((entry) => entry.last === true) ?? view.subscriptions[0];
+  const leadWindow = lead?.windows?.[0];
+  if (leadWindow?.remaining !== undefined) {
+    windows.balance = { resetsAt: "", text: money(leadWindow.remaining, leadWindow.currency ?? "USD") };
+  }
+  return { windows, endpoint: url };
+}
+
+/**
  * Locate the installed `dsh-cost-meter`'s Coding Plan module.
  *
  * The profile's `node_modules` is on this process's resolution path, so the
@@ -1262,17 +1833,18 @@ async function resolveCostMeterModule() {
 }
 
 /**
- * Add the `mistral` provider to the installed `dsh-cost-meter`'s Coding Plan
- * table, so its quota card renders this allowance beside the other plans.
+ * Add the `mistral` and `magpie` providers to the installed `dsh-cost-meter`'s
+ * Coding Plan table, so its quota cards render these allowances beside the
+ * other plans.
  *
  * `CODING_PLAN_PROVIDERS` is a plain object the cost meter reads at query time
  * (it is not frozen and the provider id is not a closed enum), so one entry is
  * enough for the card to appear — with the same enable switch, display
  * position and refresh interval as every other plan. The card's `windows` are
- * filled from `queryMistralQuota` through the `quota` hook below, which the
- * cost meter's generic branch reaches by calling the entry's own query.
+ * filled from the entries' own `quota` hooks, which the cost meter's generic
+ * branch reaches by calling the entry's own query.
  *
- * Nothing is patched on disk: the entry lives in this process and is removed
+ * Nothing is patched on disk: the entries live in this process and are removed
  * when the plugin unloads.
  * @param {{ logger: object }} options - logging seam.
  * @returns {Promise<(() => void) | undefined>} a disposer, or undefined when the cost meter is absent.
@@ -1286,26 +1858,51 @@ async function installCostMeterProvider({ logger }) {
     logger.warn("mistral-usage: dsh-cost-meter exposes no Coding Plan table; the mirror is skipped");
     return undefined;
   }
-  const saved = providers[COST_METER_PROVIDER];
-  providers[COST_METER_PROVIDER] = {
-    label: "Mistral",
-    credentialEnvs: [DEFAULT_API_KEY_ENV],
-    keyHint: "Mistral API key (the same key the llm-pi-ai Mistral route uses); shows the monthly Vibe allowance and API budget",
-    /** Quota hook read by the cost meter's generic branch. */
-    quota: (key, options) => queryMistralQuota(key, DEFAULT_BASE_URL, options?.timeoutMs ?? 15_000),
+  const entries = {
+    [COST_METER_PROVIDER]: {
+      label: "Mistral",
+      credentialEnvs: [DEFAULT_API_KEY_ENV],
+      keyHint: "Mistral API key (the same key the llm-pi-ai Mistral route uses); shows the monthly API budget",
+      /** Quota hook read by the cost meter's generic branch. */
+      quota: (key, options) => queryMistralQuota(key, DEFAULT_BASE_URL, options?.timeoutMs ?? 15_000),
+    },
+    magpie: {
+      label: "Magpie",
+      // The loopback gateway answers without a credential; the env name is
+      // listed so the card's key field has somewhere to point when one is set.
+      credentialEnvs: [DEFAULT_MAGPIE_KEY_ENV],
+      keyHint: "No key needed: Magpie's gateway reports its own subscriptions on the loopback interface",
+      quota: (key, options) => queryMagpieQuota(key, DEFAULT_MAGPIE_BASE_URL, options?.timeoutMs ?? 15_000),
+    },
   };
+  const saved = {};
+  for (const [id, entry] of Object.entries(entries)) {
+    saved[id] = providers[id];
+    providers[id] = entry;
+  }
   // The id list is a snapshot taken when that module loaded, and the cost
-  // meter iterates it to build the cards, so the new id has to join it too.
+  // meter iterates it to build the cards, so the new ids have to join it too.
   const ids = module.CODING_PLAN_PROVIDER_IDS;
-  const added = Array.isArray(ids) && !ids.includes(COST_METER_PROVIDER);
-  if (added) ids.push(COST_METER_PROVIDER);
-  logger.info?.('mistral-usage: registered the "Mistral" quota card with dsh-cost-meter');
+  const added = [];
+  if (Array.isArray(ids)) {
+    for (const id of Object.keys(entries)) {
+      if (!ids.includes(id)) {
+        ids.push(id);
+        added.push(id);
+      }
+    }
+  }
+  logger.info?.('mistral-usage: registered the "Mistral" and "Magpie" quota cards with dsh-cost-meter');
   return () => {
-    if (saved === undefined) delete providers[COST_METER_PROVIDER];
-    else providers[COST_METER_PROVIDER] = saved;
-    if (added && Array.isArray(ids)) {
-      const at = ids.indexOf(COST_METER_PROVIDER);
-      if (at >= 0) ids.splice(at, 1);
+    for (const id of Object.keys(entries)) {
+      if (saved[id] === undefined) delete providers[id];
+      else providers[id] = saved[id];
+    }
+    if (Array.isArray(ids)) {
+      for (const id of added) {
+        const at = ids.indexOf(id);
+        if (at >= 0) ids.splice(at, 1);
+      }
     }
   };
 }
@@ -1322,13 +1919,22 @@ export const inject = [];
 export const __test = {
   BRIDGE_PREFIX,
   COST_METER_PROVIDER,
+  PROVIDERS,
+  MAGPIE_PERIODS,
   normalizeBudget,
   normalizeBilling,
   refusalReason,
   dayKey,
   foldSession,
   mergeDays,
+  providerOfRoute,
+  normalizeProvider,
+  normalizeMagpiePeriod,
+  normalizeMagpieWindow,
+  normalizeMagpieQuotas,
+  normalizeMagpieUsage,
   queryMistralQuota,
+  queryMagpieQuota,
   installCostMeterProvider,
   resolveCostMeterModule,
   pricesFor: PUBLISHED_PRICES,

@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Mistral usage",
-    "description": "Shows the plan and monthly allowance of your Mistral API key in the sidebar, lists this Harness's Mistral tokens and cost in Settings, and mirrors the allowance into the cost meter's quota card."
+    "description": "Shows the plan and monthly allowance of your Mistral API key, or the local Magpie gateway's subscriptions and routed traffic, in the sidebar and in Settings — following the session's model route. Mirrors both into the cost meter's quota cards."
   }
 }

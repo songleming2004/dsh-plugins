@@ -1,8 +1,8 @@
 {
   "name": "@local/dsh-mistral-usage",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "Mistral API usage for DeepSeek Harness: a sidebar card and a Settings page showing the plan and monthly allowance Mistral's billing API reports, this Harness's Mistral tokens and cost, and a mirror into the cost meter's quota card.",
+  "description": "Usage for DeepSeek Harness: a sidebar card and a Settings page that show either the Mistral API key's plan and monthly allowance (from Mistral's billing API) or the local Magpie gateway's subscriptions and routed traffic, following the session's model route.",
   "type": "module",
   "main": "index.js",
   "exports": {

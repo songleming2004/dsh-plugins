@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Mistral 用量",
-    "description": "在侧边栏显示 Mistral API Key 的套餐与月度额度用量，并在设置页列出本 Harness 的 Mistral token 与花费；同时把额度同步到费用计量插件的额度卡片。"
+    "description": "在侧边栏与设置页显示 Mistral API Key 的套餐与月度额度，或本机 Magpie 网关的订阅与转发流量，并跟随当前会话的模型来源自动切换；同时把两者同步到费用计量插件的额度卡片。"
   }
 }

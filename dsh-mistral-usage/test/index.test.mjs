@@ -249,6 +249,7 @@ test('the view never hands the Vibe allowance to a surface', async () => {
     view.seeded = true
     const pricesFor = () => ({ prices: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, source: 'test' })
     const answer = await view.view({ refresh: true }, pricesFor)
+    assert.equal(answer.provider, 'mistral')
     assert.equal(answer.bar.budget, 'api')
     assert.equal(answer.bar.max, 50)
     assert.equal(answer.consumption.api.percent, 40)
@@ -260,6 +261,287 @@ test('the view never hands the Vibe allowance to a surface', async () => {
     globalThis.fetch = realFetch
   }
 })
+
+// #region Magpie
+
+/** A Magpie quotas body shaped like `GET /v1/magpie/quotas`. */
+function magpieQuotasBody() {
+  return {
+    data: [
+      {
+        provider: 'mistral',
+        name: 'Mistral',
+        kind: 'plan',
+        plan: 'Student',
+        windows: [{ name: 'API · Month', used: 16.2, remaining: 83.8, resetsAt: '2026-12-01T00:00:00Z', amount: 2.43, limit: 15, unit: 'USD' }],
+        readAt: '2026-11-08T21:00:44-06:00',
+      },
+      {
+        provider: 'mistral-vibe',
+        name: 'Mistral Vibe',
+        kind: 'plan',
+        plan: 'Student',
+        windows: [{ name: 'Month', used: 0.08, remaining: 99.92, resetsAt: '2026-12-01T00:00:00Z', amount: 0.12, limit: 150, unit: 'USD' }],
+        last: true,
+      },
+    ],
+    object: 'list',
+  }
+}
+
+/** A Magpie usage body shaped like `GET /v1/magpie/usage?period=30d`. */
+function magpieUsageBody() {
+  return {
+    period: '30d',
+    since: '2026-10-10T00:00:00-05:00',
+    bucket: 'day',
+    calls: 12,
+    errors: 1,
+    input: 1000,
+    output: 200,
+    cache_read: 5000,
+    cache_write: 0,
+    reasoning: 0,
+    cost: 0.25,
+    unpriced: 0,
+    sessionCount: 3,
+    path: '~/.config/magpie/usage.jsonl',
+    series: [
+      { label: 'Nov 7', time: '2026-11-07T00:00:00-06:00', calls: 2, input: 100, output: 20, cache_read: 0, cache_write: 0, cost: 0.01 },
+      { label: 'Nov 8', time: '2026-11-08T00:00:00-06:00', calls: 10, input: 900, output: 180, cache_read: 5000, cache_write: 0, cost: 0.24 },
+    ],
+    models: [{ id: 'mistral-vibe/deepseek-v4-1-flash-1017', provider: 'mistral-vibe', model: 'deepseek-v4-1-flash-1017', calls: 12, input: 1000, output: 200, cache_read: 5000, cache_write: 0, cost: 0.25 }],
+    agents: [{ id: 'dsh', name: 'DeepSeek Harness', calls: 12, input: 1000, output: 200, cache_read: 5000, cache_write: 0, cost: 0.25 }],
+  }
+}
+
+test('a model route maps to the provider that reports it', () => {
+  // The Magpie gateway is a provider row named `magpie`, so a session on it is
+  // Magpie's traffic even when the model behind it is Mistral's.
+  assert.equal(__test.providerOfRoute('magpie'), 'magpie')
+  assert.equal(__test.providerOfRoute('Magpie'), 'magpie')
+  assert.equal(__test.providerOfRoute('mistral'), 'mistral')
+  assert.equal(__test.providerOfRoute('mistral-vibe'), 'mistral')
+  assert.equal(__test.providerOfRoute('deepseek'), undefined)
+  assert.equal(__test.providerOfRoute(undefined), undefined)
+})
+
+test('a requested provider and period are coerced to the accepted set', () => {
+  assert.equal(__test.normalizeProvider('magpie'), 'magpie')
+  assert.equal(__test.normalizeProvider('MISTRAL'), 'mistral')
+  assert.equal(__test.normalizeProvider('openai'), undefined)
+  assert.equal(__test.normalizeMagpiePeriod('today'), 'today')
+  assert.equal(__test.normalizeMagpiePeriod('7d'), '7d')
+  // The gateway answers 30d for anything it does not know, so ask for it.
+  assert.equal(__test.normalizeMagpiePeriod('90d'), '30d')
+  assert.equal(__test.normalizeMagpiePeriod(undefined), '30d')
+})
+
+test('a Magpie window carries its percentage and money', () => {
+  const window = __test.normalizeMagpieWindow({ name: 'API · Month', used: 16.2, remaining: 83.8, amount: 2.43, limit: 15, unit: 'USD', resetsAt: '2026-12-01T00:00:00Z' })
+  assert.equal(window.name, 'API · Month')
+  assert.equal(window.percent, 16.2)
+  assert.equal(window.spent, 2.43)
+  assert.equal(window.limit, 15)
+  assert.equal(window.remaining, 83.8)
+  assert.equal(window.currency, 'USD')
+  assert.equal(window.resetAt, '2026-12-01T00:00:00Z')
+  assert.equal(__test.normalizeMagpieWindow(undefined), undefined)
+})
+
+test('Magpie quotas normalize into subscriptions with their windows', () => {
+  const view = __test.normalizeMagpieQuotas(magpieQuotasBody())
+  assert.equal(view.subscriptions.length, 2)
+  assert.equal(view.subscriptions[0].provider, 'mistral')
+  assert.equal(view.subscriptions[0].plan, 'Student')
+  assert.equal(view.subscriptions[0].windows[0].percent, 16.2)
+  assert.equal(view.subscriptions[1].last, true)
+  assert.equal(__test.normalizeMagpieQuotas({ data: [] }), undefined)
+  assert.equal(__test.normalizeMagpieQuotas({}), undefined)
+})
+
+test('Magpie usage normalizes into the ledger shape the panel renders', () => {
+  const ledger = __test.normalizeMagpieUsage(magpieUsageBody())
+  assert.equal(ledger.period, '30d')
+  assert.equal(ledger.total.calls, 12)
+  assert.equal(ledger.total.cacheRead, 5000)
+  assert.equal(ledger.total.cost, 0.25)
+  assert.equal(ledger.byModel[0].model, 'mistral-vibe/deepseek-v4-1-flash-1017')
+  assert.equal(ledger.byModel[0].priceSource, 'magpie')
+  assert.equal(ledger.series.length, 2)
+  // The newest bucket stands in for today, so the card keeps its two rows.
+  assert.equal(ledger.today.label, 'Nov 8')
+  assert.equal(ledger.today.calls, 10)
+  assert.equal(ledger.agents[0].name, 'DeepSeek Harness')
+  assert.equal(ledger.sessionCount, 3)
+  assert.equal(__test.normalizeMagpieUsage(undefined), undefined)
+})
+
+test('the Magpie view reads the gateway and leads with the served subscription', async () => {
+  const realFetch = globalThis.fetch
+  const asked = []
+  globalThis.fetch = async (url) => {
+    asked.push(String(url))
+    if (String(url).includes('/v1/magpie/quotas')) return new Response(JSON.stringify(magpieQuotasBody()), { status: 200 })
+    return new Response(JSON.stringify(magpieUsageBody()), { status: 200 })
+  }
+  try {
+    const view = new __test.MistralUsage({
+      ctx: { get: () => undefined },
+      apiKeyEnv: 'MISTRAL_API_KEY',
+      baseURL: 'https://api.mistral.ai',
+      currency: 'EUR',
+      barMax: 125,
+      requestTimeoutMs: 1000,
+      costMeter: false,
+      magpieBaseURL: 'http://127.0.0.1:3425',
+      magpieKeyEnv: 'MAGPIE_GATEWAY_KEY',
+      logger: { warn() {}, info() {}, debug() {} },
+    })
+    const answer = await view.view({ provider: 'magpie', period: '30d' }, () => ({ prices: {}, source: 'test' }))
+    assert.equal(answer.provider, 'magpie')
+    assert.equal(answer.status, 'ok')
+    // The subscription Magpie served last leads the card.
+    assert.equal(answer.subscription, 'mistral-vibe')
+    assert.equal(answer.plan, 'Student')
+    assert.equal(answer.bar.percent, 0.08)
+    assert.equal(answer.bar.max, 150)
+    assert.equal(answer.usage.total.calls, 12)
+    assert.ok(asked.some((url) => url.endsWith('/v1/magpie/usage?period=30d')), 'the usage window is asked for')
+    assert.ok(asked.every((url) => url.startsWith('http://127.0.0.1:3425')), 'only the gateway is asked')
+    // The Mistral billing API is never touched for a Magpie view.
+    assert.ok(!asked.some((url) => url.includes('api.mistral.ai')), 'the vendor is not asked')
+  } finally {
+    globalThis.fetch = realFetch
+  }
+})
+
+test('a gateway that is not running is reported, not thrown', async () => {
+  const realFetch = globalThis.fetch
+  globalThis.fetch = async () => {
+    throw new Error('connect ECONNREFUSED 127.0.0.1:3425')
+  }
+  try {
+    const view = new __test.MistralUsage({
+      ctx: { get: () => undefined },
+      apiKeyEnv: 'MISTRAL_API_KEY',
+      baseURL: 'https://api.mistral.ai',
+      currency: 'EUR',
+      barMax: 125,
+      requestTimeoutMs: 1000,
+      costMeter: false,
+      logger: { warn() {}, info() {}, debug() {} },
+    })
+    const answer = await view.view({ provider: 'magpie' }, () => ({ prices: {}, source: 'test' }))
+    assert.equal(answer.status, 'unreachable')
+    assert.match(answer.message, /not answering/)
+    assert.equal(answer.subscriptions.length, 0)
+  } finally {
+    globalThis.fetch = realFetch
+  }
+})
+
+test('the view follows the session route until a provider is asked for', async () => {
+  const realFetch = globalThis.fetch
+  const asked = []
+  globalThis.fetch = async (url) => {
+    asked.push(String(url))
+    if (String(url).includes('/v1/magpie/quotas')) return new Response(JSON.stringify(magpieQuotasBody()), { status: 200 })
+    if (String(url).includes('/v1/magpie/usage')) return new Response(JSON.stringify(magpieUsageBody()), { status: 200 })
+    return new Response(JSON.stringify(budgetBody()), { status: 200 })
+  }
+  try {
+    const view = new __test.MistralUsage({
+      ctx: { get: (name) => (name === 'credentials' ? { resolve: async () => ({ value: 'sk-test', source: 'file' }) } : undefined) },
+      apiKeyEnv: 'MISTRAL_API_KEY',
+      baseURL: 'https://api.mistral.ai',
+      currency: 'EUR',
+      barMax: 125,
+      requestTimeoutMs: 1000,
+      costMeter: false,
+      logger: { warn() {}, info() {}, debug() {} },
+    })
+    view.seeded = true
+    const pricesFor = () => ({ prices: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, source: 'test' })
+    // Nothing seen yet: the bundle's original subject leads.
+    assert.equal(view.providerFor('s1'), undefined)
+    const first = await view.view({ sessionId: 's1' }, pricesFor)
+    assert.equal(first.provider, 'mistral')
+    assert.equal(first.followed, null)
+    // A Magpie-routed call moves the session, and the next view follows it.
+    view.observeRoute('s1', 'magpie')
+    const second = await view.view({ sessionId: 's1' }, pricesFor)
+    assert.equal(second.provider, 'magpie')
+    assert.equal(second.followed, 'magpie')
+    // Another session is unaffected.
+    view.observeRoute('s2', 'mistral')
+    assert.equal((await view.view({ sessionId: 's2' }, pricesFor)).provider, 'mistral')
+    // An explicit request still wins over the route.
+    assert.equal((await view.view({ sessionId: 's2', provider: 'magpie' }, pricesFor)).provider, 'magpie')
+  } finally {
+    globalThis.fetch = realFetch
+  }
+})
+
+test('a Magpie-routed call is not folded into the local Mistral ledger', () => {
+  // Magpie reports its own traffic, so folding it here would count the same
+  // call twice across the two views.
+  const now = Date.now()
+  const lines = [
+    JSON.stringify({
+      type: 'assistant/message',
+      time: now - 1000,
+      data: { usage: { inputTokens: 1000, outputTokens: 100 }, message: { source: { provider: 'magpie', model: 'mistral-vibe/deepseek-v4-1-flash-1017' } } },
+    }),
+    JSON.stringify({
+      type: 'assistant/message',
+      time: now - 900,
+      data: { usage: { inputTokens: 10, outputTokens: 1 }, message: { source: { provider: 'mistral', model: 'deepseek-v4-1-flash-1017' } } },
+    }),
+  ]
+  const fold = __test.foldSession(lines.join('\n'), now + 10_000)
+  const day = fold.days[__test.dayKey(now - 1000)]
+  assert.equal(day.calls, 1, 'only the direct Mistral call is folded')
+  assert.equal(day.input, 10)
+  assert.equal(day.byModel['mistral-vibe/deepseek-v4-1-flash-1017'], undefined)
+})
+
+test('the Magpie quota answer carries the window fields the cost meter renders', async () => {
+  const realFetch = globalThis.fetch
+  globalThis.fetch = async () => new Response(JSON.stringify(magpieQuotasBody()), { status: 200 })
+  try {
+    const answer = await __test.queryMagpieQuota(undefined, 'http://127.0.0.1:3425', 1000)
+    assert.ok('mistral' in answer.windows, 'the Mistral subscription is a window')
+    assert.ok('mistral-vibe' in answer.windows, 'the Vibe subscription is a window')
+    // The last-served subscription's remaining money is the balance row.
+    assert.equal(answer.windows.balance.text, '$99.92')
+    for (const window of Object.values(answer.windows)) {
+      for (const key of Object.keys(window)) assert.ok(['percent', 'resetsAt', 'text'].includes(key), `unexpected field ${key}`)
+    }
+    assert.equal(answer.windows.mistral.percent, 16.2)
+  } finally {
+    globalThis.fetch = realFetch
+  }
+})
+
+test('a gateway that is down is a soft failure for the cost meter', async () => {
+  const realFetch = globalThis.fetch
+  globalThis.fetch = async () => {
+    throw new Error('connect ECONNREFUSED')
+  }
+  try {
+    await assert.rejects(() => __test.queryMagpieQuota(undefined, 'http://127.0.0.1:3425', 1000), (error) => {
+      assert.equal(error.soft, true)
+      assert.match(error.message, /not answering/)
+      return true
+    })
+  } finally {
+    globalThis.fetch = realFetch
+  }
+})
+
+// #endregion
+
 
 test('the bundle manifest and patch agree', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))

@@ -13,7 +13,7 @@ plugin.
 | `dsh-local-build-plugins-tab` | `@local/dsh-local-build-plugins-tab` | Adds the "Local build" tab to Plugin Manager. |
 | `dsh-turn-notify` | `@local/dsh-turn-notify` | Notifies when a turn finishes. |
 | `dsh-sidebar-enhance` | `@local/dsh-sidebar-enhance` | One plugin with two components: caps the right Sidebar's first-open width at one third of "panel + conversation" (per Session, per app run), and makes long Sidebar pages scroll from the first card with an always-visible scrollbar and bottom breathing room under the last card. |
-| `dsh-mistral-usage` | `@local/dsh-mistral-usage` | Shows the Mistral API key's plan and monthly allowance (read from Mistral's billing API) on a sidebar card, lists this Harness's Mistral tokens and estimated cost in Settings, and mirrors the allowance into the cost meter's quota card as **Mistral**. |
+| `dsh-mistral-usage` | `@local/dsh-mistral-usage` | Shows the Mistral API key's plan and monthly allowance (read from Mistral's billing API) **or** the local Magpie gateway's subscriptions and routed traffic on a sidebar card and in Settings — following the session's model route, with a manual switch on both. Lists this Harness's Mistral tokens and estimated cost, and mirrors both allowances into the cost meter's quota cards as **Mistral** and **Magpie**. |
 
 ## Shape of one bundle
 

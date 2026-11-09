@@ -1,10 +1,12 @@
-# Mistral usage — the Mistral allowance in the sidebar, and this Harness's
-# Mistral spend, plus a mirror into the cost meter's quota card.
+# Usage — the Mistral allowance and this Harness's Mistral spend, plus the
+# local Magpie gateway's subscriptions and traffic, on one card and one page.
 #
 # The Host half resolves MISTRAL_API_KEY, reads the plan and both monthly
 # budgets from Mistral's public billing API, folds every Mistral request this
-# Harness routed into a per-day ledger, and serves both to the Client half.
-# The Client half renders the sidebar card and the Settings page.
+# Harness routed into a per-day ledger, and reads the Magpie gateway's own
+# quota and usage reports. The Client half renders the sidebar card and the
+# Settings page, and follows the current session's model route: a session on
+# the `magpie` provider shows Magpie, a session on Mistral shows Mistral.
 #
 # Optional overrides (a patch replaces the whole row config, so repeat every
 # key you keep):
@@ -16,7 +18,10 @@
 #                                   # spends it in its own harness, not this key)
 #   requestTimeoutMs: 15000         # per-request timeout
 #   costMeter: true                 # mirror into dsh-cost-meter's "Mistral"
-#                                   # quota card when that plugin is installed
+#                                   # and "Magpie" quota cards
+#   magpieBaseURL: http://127.0.0.1:3425  # the local Magpie gateway
+#   magpieKeyEnv: MAGPIE_GATEWAY_KEY      # only needed when the gateway is
+#                                         # shared on the network
 #   prices:                         # override the per-model price per million
 #     deepseek-v4-1-flash-1017:     # tokens (input/output/cacheRead/cacheWrite)
 #       input: 0.3                  # used by the cost estimate
@@ -32,3 +37,5 @@
         barMax: 125
         requestTimeoutMs: 15000
         costMeter: true
+        magpieBaseURL: http://127.0.0.1:3425
+        magpieKeyEnv: MAGPIE_GATEWAY_KEY
