@@ -5,7 +5,8 @@
  * `plugins.tab` entry after the shipped Installed tab and the Discover tab, and
  * the tab lists the locally built bundles. Every row carries its own switch
  * (backed by `pluginManager.setBundleEnabled`) and the tab also offers one
- * button that disables every other local build in a single click.
+ * bulk button that either disables every other local build or turns every one
+ * of them back on, depending on what is currently switched on.
  *
  * The bundle that ships this component (`@local/dsh-local-build-plugins`)
  * inserts this package as its own component row, so this bundle patch stays
@@ -43,13 +44,18 @@ window.__ModuleLoader__.load({
       description: '这些插件从本地目录构建安装。关闭后不会卸载，可随时在「已安装」中重新打开。',
       actionDisable: '关闭其他本地构建插件',
       actionDisableCount: '关闭其他本地构建插件（{count}）',
+      actionEnable: '开启其他本地构建插件',
+      actionEnableCount: '开启其他本地构建插件（{count}）',
       ownTag: '本插件',
       empty: '还没有本地构建的插件。',
       loading: '正在读取插件…',
       loadError: '无法读取插件列表。',
       disabling: '正在关闭…',
+      enabling: '正在开启…',
       done: '已关闭 {count} 个插件。',
       partial: '已关闭 {count} 个插件，{failed} 个未能关闭。',
+      enabledDone: '已开启 {count} 个插件。',
+      enabledPartial: '已开启 {count} 个插件，{failed} 个未能开启。',
       toggleFailed: '无法切换 {name}。',
       enableRow: '启用 {name}',
       disableRow: '停用 {name}',
@@ -61,13 +67,18 @@ window.__ModuleLoader__.load({
       description: 'These plugins are built and installed from local directories. Disabling one does not uninstall it; turn it on again from Installed.',
       actionDisable: 'Disable other local builds',
       actionDisableCount: 'Disable other local builds ({count})',
+      actionEnable: 'Enable other local builds',
+      actionEnableCount: 'Enable other local builds ({count})',
       ownTag: 'This plugin',
       empty: 'No locally built plugins yet.',
       loading: 'Reading plugins…',
       loadError: 'Could not read the plugin list.',
       disabling: 'Disabling…',
+      enabling: 'Enabling…',
       done: 'Disabled {count} plugins.',
       partial: 'Disabled {count} plugins; {failed} could not be disabled.',
+      enabledDone: 'Enabled {count} plugins.',
+      enabledPartial: 'Enabled {count} plugins; {failed} could not be enabled.',
       toggleFailed: 'Could not switch {name}.',
       enableRow: 'Enable {name}',
       disableRow: 'Disable {name}',
@@ -236,18 +247,28 @@ window.__ModuleLoader__.load({
         }
 
         const others = state.packages.filter((pkg) => pkg.name !== OWN_PACKAGE)
-        const targets = others.filter((pkg) => pkg.enabled === true)
+        const enabledOthers = others.filter((pkg) => pkg.enabled === true)
+        const disabledOthers = others.filter((pkg) => pkg.enabled !== true)
         const bulkBusy = busyName !== null
+        /**
+         * The bulk action flips whichever side is non-empty: while any other
+         * local build is on it turns them all off, and once every one of them
+         * is off it turns them all back on. A mixed list therefore disables,
+         * which matches the button's original single purpose.
+         */
+        const bulkMode = enabledOthers.length > 0 ? 'disable' : 'enable'
+        const bulkTargets = bulkMode === 'disable' ? enabledOthers : disabledOthers
 
-        const disableOthers = async () => {
-          if (bulkBusy || targets.length === 0) return
+        const toggleOthers = async () => {
+          if (bulkBusy || bulkTargets.length === 0) return
+          const enabling = bulkMode === 'enable'
           setBusyName('__all__')
           setReport(null)
           let done = 0
           let failed = 0
-          for (const pkg of targets) {
+          for (const pkg of bulkTargets) {
             try {
-              const result = await remote.setBundleEnabled(pkg.name, false)
+              const result = await remote.setBundleEnabled(pkg.name, enabling)
               if (result !== null && typeof result === 'object' && result.ok === true) done += 1
               else failed += 1
             } catch (error) {
@@ -256,7 +277,9 @@ window.__ModuleLoader__.load({
           }
           await load()
           setBusyName(null)
-          setReport(failed === 0 ? { kind: 'done', count: done } : { kind: 'partial', count: done, failed })
+          const doneKey = enabling ? 'enabledDone' : 'done'
+          const partialKey = enabling ? 'enabledPartial' : 'partial'
+          setReport(failed === 0 ? { kind: doneKey, count: done } : { kind: partialKey, count: done, failed })
         }
 
         const rows = state.packages.map((pkg) => {
@@ -281,14 +304,16 @@ window.__ModuleLoader__.load({
         })
 
         const actionLabel = busyName === '__all__'
-          ? t('disabling')
-          : targets.length > 0 ? t('actionDisableCount', { count: targets.length }) : t('actionDisable')
+          ? t(bulkMode === 'enable' ? 'enabling' : 'disabling')
+          : bulkMode === 'enable'
+            ? (bulkTargets.length > 0 ? t('actionEnableCount', { count: bulkTargets.length }) : t('actionEnable'))
+            : (bulkTargets.length > 0 ? t('actionDisableCount', { count: bulkTargets.length }) : t('actionDisable'))
 
         const notice = report === null
           ? null
           : report.kind === 'failed'
             ? t('toggleFailed', { name: report.name })
-            : t(report.kind === 'done' ? 'done' : 'partial', report)
+            : t(report.kind, report)
 
         return React.createElement('div', {
           style: { display: 'flex', flexDirection: 'column', gap: 12 },
@@ -311,12 +336,12 @@ window.__ModuleLoader__.load({
                 React.createElement('button', {
                   type: 'button',
                   style: {
-                    ...BUTTON_STYLE,
-                    opacity: bulkBusy || targets.length === 0 ? 0.55 : 1,
-                    cursor: bulkBusy || targets.length === 0 ? 'default' : 'pointer',
+                    ...(bulkMode === 'enable' ? SECONDARY_BUTTON_STYLE : BUTTON_STYLE),
+                    opacity: bulkBusy || bulkTargets.length === 0 ? 0.55 : 1,
+                    cursor: bulkBusy || bulkTargets.length === 0 ? 'default' : 'pointer',
                   },
-                  disabled: bulkBusy || targets.length === 0,
-                  onClick: disableOthers,
+                  disabled: bulkBusy || bulkTargets.length === 0,
+                  onClick: toggleOthers,
                 }, actionLabel),
                 notice === null ? null : React.createElement('p', { style: NOTICE_STYLE, role: 'status' }, notice)))
       }

@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Local build plugins tab",
-    "description": "Adds a Local build plugins tab that lists locally built plugins, switches each one, and can disable all the others at once."
+    "description": "Adds a Local build plugins tab that lists locally built plugins, switches each one, and can disable or enable all the others at once."
   }
 }

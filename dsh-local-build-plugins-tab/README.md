@@ -4,9 +4,10 @@ The **Local build plugins** tab component of the Local build plugins bundle.
 
 It registers one `plugins.tab` entry after the shipped **Installed** tab and the
 **Discover** tab. The tab lists the locally built bundles with a switch on every
-row (backed by `pluginManager.setBundleEnabled`) and one button that disables
-every other local build in a single click. It never lists itself or the bundle
-that owns it as separate entries.
+row (backed by `pluginManager.setBundleEnabled`) and one bulk button that flips
+every other local build at once: while any of them is on it disables them all,
+and once every one of them is off it turns them all back on. It never lists
+itself or the bundle that owns it as separate entries.
 
 This package carries its own Client half so the bundle can mount it as an
 independent component row: the bundle's patch inserts
